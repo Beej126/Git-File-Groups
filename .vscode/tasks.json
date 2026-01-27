@@ -1,0 +1,56 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "pnpm: watch",
+			"type": "shell",
+			"command": "pnpm run watch",
+			"problemMatcher": {
+				"owner": "webpack",
+				"severity": "error",
+				"fileLocation": "relative",
+				"pattern": {
+					"regexp": ".*", // Captures everything to prevent the "pattern" error
+					"file": 1,
+					"location": 2,
+					"message": 3
+				},
+				
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "Compiler starting...",
+					"endsPattern": "compiled successfully"
+				}
+			},
+			"isBackground": true,
+			"presentation": {
+				// "reveal": "never",
+				"group": "watchers"
+			},
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
+		},
+		{
+			"label": "pnpm: watch-tests",
+			"type": "shell",
+			"command": "pnpm run watch-tests",
+			"problemMatcher": "$tsc-watch",
+			"isBackground": true,
+			"presentation": {
+				"reveal": "never",
+				"group": "watchers"
+			},
+			"group": "build"
+		},
+		{
+			"label": "tasks: watch-all",
+			"dependsOn": [
+				"pnpm: watch",
+				"pnpm: watch-tests"
+			],
+			"problemMatcher": []
+		}
+	]
+}
