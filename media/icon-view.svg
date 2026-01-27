@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true">
+  <!-- Official-Git-inspired icon with grouping boxes -->
+  <defs>
+    <style>
+      .git-fill{fill:#F05032}
+      .git-stroke{stroke:#F05032;stroke-width:4;stroke-linecap:round;stroke-linejoin:round;fill:none}
+      .dot-inner{fill:#fff}
+      .group-fill{fill:#333}
+    </style>
+  </defs>
+
+  <!-- Git logo (three nodes connected) -->
+  <g>
+    <!-- connecting lines -->
+    <path class="git-stroke" d="M18 32 L42 14" />
+    <path class="git-stroke" d="M18 32 L42 50" />
+    <path class="git-stroke" d="M42 22 L42 42" />
+
+    <!-- nodes (outer) -->
+    <circle cx="18" cy="32" r="8" class="git-fill" />
+    <circle cx="42" cy="14" r="8" class="git-fill" />
+    <circle cx="42" cy="50" r="8" class="git-fill" />
+
+    <!-- nodes (inner white) -->
+    <circle cx="18" cy="32" r="3.5" class="dot-inner" />
+    <circle cx="42" cy="14" r="3.5" class="dot-inner" />
+    <circle cx="42" cy="50" r="3.5" class="dot-inner" />
+  </g>
+
+  <!-- grouping boxes to the right of the Git icon -->
+  <g transform="translate(52,14)">
+    <rect x="0" y="0" width="6" height="6" rx="1" class="group-fill" />
+    <rect x="8" y="0" width="6" height="6" rx="1" class="group-fill" />
+    <rect x="0" y="8" width="6" height="6" rx="1" class="group-fill" />
+    <rect x="8" y="8" width="6" height="6" rx="1" class="group-fill" />
+  </g>
+
+</svg>

@@ -1,26 +1,71 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
+  let disposable = vscode.commands.registerCommand('git-file-groups.helloWorld', () => {
+    vscode.window.showInformationMessage('Hello World from git-file-groups!');
+  });
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "git-file-groups" is now active!');
+  context.subscriptions.push(disposable);
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('git-file-groups.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from Git File Groups!');
-	});
+  const sidebarProvider = new SidebarProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider)
+  );
 
-	context.subscriptions.push(disposable);
+  context.subscriptions.push(
+    vscode.commands.registerCommand('git-file-groups.openSidebar', () => {
+      const panel = vscode.window.createWebviewPanel(
+        'gitFileGroupsSidebar',
+        'Git File Groups Sidebar',
+        vscode.ViewColumn.One,
+        {
+          enableScripts: true,
+          localResourceRoots: [context.extensionUri]
+        }
+      );
+      panel.webview.html = sidebarProvider._getHtmlForWebview(panel.webview);
+    })
+  );
 }
 
-// This method is called when your extension is deactivated
 export function deactivate() {}
+
+class SidebarProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'gitFileGroupsSidebar';
+
+  private _view?: vscode.WebviewView;
+
+  constructor(private readonly _extensionUri: vscode.Uri) {}
+
+  public resolveWebviewView(webviewView: vscode.WebviewView, context: vscode.WebviewViewResolveContext<unknown>, token: vscode.CancellationToken): void | Thenable<void> {
+    this._view = webviewView;
+
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this._extensionUri]
+    };
+
+    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+  }
+
+  public _getHtmlForWebview(webview: vscode.Webview): string {
+    const styleResetUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css'));
+    const styleMainUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'vscode.css'));
+
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Git File Groups Sidebar (GfG)</title>
+  <link href="${styleResetUri}" rel="stylesheet">
+  <link href="${styleMainUri}" rel="stylesheet">
+</head>
+<body>
+  <h1>Welcome to Git File Groups Sidebar (GfG)</h1>
+  <p>This is where you can manage your file groups.</p>
+</body>
+</html>`;
+  }
+}
