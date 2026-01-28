@@ -1,0 +1,2 @@
+- `setxx -system OLLAMA_FLASH_ATTENTION 1`
+  - The Issue: Ollama on Windows sometimes defaults to settings that don't fully leverage the 50 series architecture without explicit environment variables. Then restart Ollama. This significantly speeds up the processing of long contexts on high-end cards like yours.

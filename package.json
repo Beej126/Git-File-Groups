@@ -1,0 +1,131 @@
+{
+  "name": "git-file-groups",
+  "version": "0.1.0",
+  "description": "Group source control changed files in VSCode tree view",
+  "main": "./out/extension.js",
+  "volta": {
+    "node": "24.13.0",
+    "pnpm": "10.28.2"
+  },
+  "engines": {
+    "vscode": "^1.76.0"
+  },
+  "activationEvents": [
+    "onView:gitFileGroupsTreeView",
+    "onCommand:git-file-groups.refreshGroup",
+    "onCommand:git-file-groups.createGroup",
+    "onCommand:git-file-groups.renameGroup",
+    "onCommand:git-file-groups.commitGroup",
+    "onCommand:git-file-groups.commitWithMessage",
+    "onCommand:git-file-groups.openFile",
+    "onCommand:git-file-groups.openDiff",
+    "onGitChanged"
+  ],
+  "contributes": {
+    "views": {
+      "scm": [
+        {
+          "id": "gitFileGroupsTreeView",
+          "name": "Git File Groups"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "git-file-groups.refreshGroup",
+        "title": "Refresh",
+        "icon": {
+          "light": "media/icon-view.svg",
+          "dark": "media/icon-view.svg"
+        }
+      },
+      {
+        "command": "git-file-groups.createGroup",
+        "title": "Create Group",
+        "icon": "$(add)"
+      },
+      {
+        "command": "git-file-groups.renameGroup",
+        "title": "Rename"
+      },
+      {
+        "command": "git-file-groups.commitGroup",
+        "title": "Commit Group",
+        "icon": "$(check)"
+      },
+      {
+        "command": "git-file-groups.commitWithMessage",
+        "title": "Commit Changes",
+        "icon": "$(check)"
+      },
+      {
+        "command": "git-file-groups.openDiff",
+        "title": "Open Diff"
+      },
+      {
+        "command": "git-file-groups.openFile",
+        "title": "Open File",
+        "icon": "$(go-to-file)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "git-file-groups.refreshGroup",
+          "when": "view == gitFileGroupsTreeView",
+          "group": "navigation"
+        },
+        {
+          "command": "git-file-groups.createGroup",
+          "when": "view == gitFileGroupsTreeView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "git-file-groups.openFile",
+          "when": "view == gitFileGroupsTreeView && viewItem == file",
+          "group": "inline"
+        },
+        {
+          "command": "git-file-groups.commitGroup",
+          "when": "view == gitFileGroupsTreeView && viewItem == group",
+          "group": "inline"
+        },
+        {
+          "command": "git-file-groups.renameGroup",
+          "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
+          "group": "inline"
+        },
+        {
+          "command": "git-file-groups.renameGroup",
+          "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
+          "group": "1@navigation"
+        },
+        {
+          "command": "git-file-groups.commitGroup",
+          "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
+          "group": "2@navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "watch": "tsc -watch -p ./",
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "@types/vscode": "^1.76.0",
+    "@vscode/test-electron": "^2.3.0",
+    "@vscode/vsce": "^2.15.0",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.39.2",
+    "nodemon": "^3.1.11",
+    "prettier": "^2.8.8",
+    "typescript": "^5.0.4"
+  }
+}
