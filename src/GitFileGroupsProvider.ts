@@ -156,6 +156,16 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     });
 
     if (!message) {
+      // User cancelled - unstage all changes to restore original state
+      log(`[commitGroup] User cancelled, unstaging all changes`);
+      for (const change of allChanges) {
+        log(`[commitGroup] Unstaging (cancel): ${change.resourceUri}`);
+        try {
+          await repository.revert([change.resourceUri.fsPath]);
+        } catch (e) {
+          log(`Failed to unstage ${change.resourceUri.fsPath}: ${e}`);
+        }
+      }
       return; // User cancelled
     }
 

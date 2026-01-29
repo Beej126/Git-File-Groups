@@ -2,6 +2,8 @@
   "name": "git-file-groups",
   "version": "0.1.0",
   "description": "Group source control changed files in VSCode tree view",
+  "publisher": "Beej",
+  "repository": "https://github.com/beej126/Git-File-Groups",
   "main": "./out/extension.js",
   "volta": {
     "node": "24.13.0",
