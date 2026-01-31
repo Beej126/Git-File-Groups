@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { ProjectStorage, GitFileGroupsData } from './ProjectStorage';
 
 // Create output channel for logging
 const outputChannel = vscode.window.createOutputChannel('Git File Groups');
@@ -16,26 +17,187 @@ interface GitAPI {
 }
 
 export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
-  private static readonly GROUPS_KEY = 'git-file-groups.groups';
-  private static readonly ASSIGNMENTS_KEY = 'git-file-groups.assignments';
-  public static readonly UNGROUPED = '*Ungrouped';
+  public static readonly UNGROUPED = '{ungrouped}';
   private onDidChangeTreeDataEmitter = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
-  private groups: string[];
-  private assignments: Record<string, string>;
+  private groups: string[] = [];
+  private assignments: Record<string, string> = {};
   private cachedRepositoryRoot: string | undefined;
+  private storage: ProjectStorage;
+  private treeView: vscode.TreeView<vscode.TreeItem> | undefined;
+
+  private async executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
+    for (const commandId of commandIds) {
+      try {
+        await vscode.commands.executeCommand(commandId);
+        return true;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        // If the command is not found, try next. Otherwise log and try next.
+        log(`${commandId} failed: ${message}`);
+      }
+    }
+    return false;
+  }
+
+  private async expandRootsByReveal(): Promise<void> {
+    if (!this.treeView) {
+      return;
+    }
+
+    const rootItems = await this.getChildren(undefined);
+    for (const item of rootItems) {
+      if (item instanceof GroupNode) {
+        try {
+          await this.treeView.reveal(item, { select: false, focus: false, expand: true });
+        } catch (e) {
+          log(`Failed to expand root ${item.label}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
+  }
+
+  private async tryExpandAllByDiscovery(): Promise<boolean> {
+    try {
+      const all = await vscode.commands.getCommands(true);
+      const candidates = all
+        .filter(c => c.toLowerCase().includes('expand') && c.toLowerCase().includes('all'))
+        .sort((a, b) => a.localeCompare(b));
+
+      // Log a small hint for debugging.
+      log(`expandAll discovery candidates: ${candidates.slice(0, 10).join(', ')}`);
+
+      for (const cmd of candidates) {
+        try {
+          await vscode.commands.executeCommand(cmd);
+          log(`expandAll succeeded via ${cmd}`);
+          return true;
+        } catch {
+          // keep trying
+        }
+      }
+    } catch (e) {
+      log(`expandAll discovery failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    return false;
+  }
 
   constructor(private workspaceRoot: string, private state: vscode.Memento) {
     log(`GitFileGroupsProvider constructor called with workspaceRoot: ${this.workspaceRoot}`);
     log(`Constructor timestamp: ${new Date().toISOString()}`);
-    this.groups = this.state.get<string[]>(GitFileGroupsProvider.GROUPS_KEY, []);
-    this.assignments = this.state.get<Record<string, string>>(GitFileGroupsProvider.ASSIGNMENTS_KEY, {});
-    this.refresh();
+    
+    this.storage = new ProjectStorage(workspaceRoot);
+    this.initializeStorage().then(() => {
+      this.refresh();
+    });
+  }
+
+  private async initializeStorage(): Promise<void> {
+    // Try to migrate from global state first
+    const migrated = await this.storage.migrateFromGlobalState(this.state);
+    if (migrated) {
+      log('Successfully migrated data from global state to project file');
+    }
+    
+    // Load data from project file
+    await this.loadData();
+  }
+
+  private async loadData(): Promise<void> {
+    const data = await this.storage.loadData();
+    this.groups = data.groups || [];
+    this.assignments = data.assignments || {};
+  }
+
+  private async saveData(): Promise<void> {
+    await this.storage.saveData({
+      groups: this.groups,
+      assignments: this.assignments
+    });
   }
 
   getWorkspaceRoot(): string {
     return this.workspaceRoot;
+  }
+
+  setTreeView(treeView: vscode.TreeView<vscode.TreeItem>): void {
+    this.treeView = treeView;
+  }
+
+  dispose(): void {
+    // Clean up resources
+    this.onDidChangeTreeDataEmitter.dispose();
+  }
+
+  async toggleExpandCollapse(): Promise<void> {
+    log('toggleExpandCollapse called');
+
+    if (!this.treeView) {
+      log('No treeView available');
+      return;
+    }
+
+    // Ensure our tree view is focused, otherwise collapseAll/expandAll may target a different view.
+    // We focus by revealing the first root item.
+    const rootItems = await this.getChildren(undefined);
+    const first = rootItems[0];
+    if (first) {
+      try {
+        await this.treeView.reveal(first, { focus: true, select: false, expand: false });
+      } catch (e) {
+        log(`Failed to focus tree view via reveal: ${e}`);
+      }
+    }
+
+    const expanded = await this.executeFirstAvailableCommand([
+      // VS Code list/tree widgets
+      'list.expandAll',
+      // Some builds may expose treeview-specific IDs
+      'workbench.actions.treeView.expandAll'
+    ]);
+
+    // Windsurf seems to have collapseAll but not expandAll; do a safe fallback that only affects
+    // our tree view by expanding each root node.
+    if (!expanded) {
+      await this.expandRootsByReveal();
+    }
+
+    // After expanding, show the Collapse button.
+    await vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
+    log('toggleExpandCollapse completed');
+  }
+
+  async collapseAllGroups(): Promise<void> {
+    log('collapseAllGroups called');
+
+    if (!this.treeView) {
+      log('No treeView available');
+      return;
+    }
+
+    // Ensure our tree view is focused, otherwise collapseAll/expandAll may target a different view.
+    const rootItems = await this.getChildren(undefined);
+    const first = rootItems[0];
+    if (first) {
+      try {
+        await this.treeView.reveal(first, { focus: true, select: false, expand: false });
+      } catch (e) {
+        log(`Failed to focus tree view via reveal: ${e}`);
+      }
+    }
+
+    await this.executeFirstAvailableCommand([
+      // VS Code list/tree widgets
+      'list.collapseAll',
+      // Some builds may expose treeview-specific IDs
+      'workbench.actions.treeView.collapseAll'
+    ]);
+
+    // After collapsing, show the Expand button.
+    await vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', false);
+    log('collapseAllGroups completed');
   }
 
   refresh(): void {
@@ -55,7 +217,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
 
     this.groups = [...this.groups, trimmed].sort((a, b) => a.localeCompare(b));
-    await this.state.update(GitFileGroupsProvider.GROUPS_KEY, this.groups);
+    await this.saveData();
     this.refresh();
   }
 
@@ -74,7 +236,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     // Update groups list
     this.groups[index] = trimmedNew;
     this.groups = [...this.groups].sort((a, b) => a.localeCompare(b));
-    await this.state.update(GitFileGroupsProvider.GROUPS_KEY, this.groups);
 
     // Migrate assignments from old name to new name
     for (const [key, value] of Object.entries(this.assignments)) {
@@ -82,8 +243,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         this.assignments[key] = trimmedNew;
       }
     }
-    await this.state.update(GitFileGroupsProvider.ASSIGNMENTS_KEY, this.assignments);
-
+    await this.saveData();
     this.refresh();
   }
 
@@ -234,12 +394,37 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
     }
 
-    await this.state.update(GitFileGroupsProvider.ASSIGNMENTS_KEY, this.assignments);
+    await this.saveData();
     this.refresh();
   }
 
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
     return element;
+  }
+
+  getParent(element: vscode.TreeItem): vscode.TreeItem | undefined {
+    // For GroupNodes, return undefined (they are root level)
+    // For FileNodes, return the GroupNode they belong to
+    if (element instanceof FileNode) {
+      for (const groupName of [GitFileGroupsProvider.UNGROUPED, ...this.groups]) {
+        if (!element.resourceUri) {
+          continue;
+        }
+
+        const key = this.toAssignmentKey(element.resourceUri);
+        const assigned = key ? this.assignments[key] : undefined;
+
+        if (groupName === GitFileGroupsProvider.UNGROUPED && !assigned) {
+          return new GroupNode(groupName);
+        }
+
+        if (assigned === groupName) {
+          return new GroupNode(groupName);
+        }
+      }
+    }
+
+    return undefined;
   }
 
   async getChildren(element?: vscode.TreeItem | undefined): Promise<vscode.TreeItem[]> {
@@ -255,19 +440,15 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         : (files.grouped[groupName] || []);
 
       return fileEntries.map(entry => new FileNode(entry.fileName, entry.resourceUri));
-    } else {
-      log('Getting top-level groups');
-      const groups: vscode.TreeItem[] = [];
-      groups.push(new GroupNode(GitFileGroupsProvider.UNGROUPED));
-      for (const groupName of this.groups) {
-        groups.push(new GroupNode(groupName));
-      }
-      return groups;
     }
-  }
 
-  dispose(): void {
-    // Implement any necessary cleanup
+    log('Getting top-level groups');
+    const groups: vscode.TreeItem[] = [];
+    groups.push(new GroupNode(GitFileGroupsProvider.UNGROUPED, true));
+    for (const groupName of this.groups) {
+      groups.push(new GroupNode(groupName, true));
+    }
+    return groups;
   }
 
   private getGroupLabel(type: number): string {
@@ -489,10 +670,11 @@ export class FileNode extends vscode.TreeItem {
 
 export class GroupNode extends vscode.TreeItem {
   constructor(
-    public readonly groupName: string
+    public readonly groupName: string,
+    isExpanded: boolean = true
   ) {
-    super(groupName, vscode.TreeItemCollapsibleState.Expanded);
+    super(groupName, isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
     this.contextValue = groupName === GitFileGroupsProvider.UNGROUPED ? 'ungrouped' : 'group';
-    this.description = groupName === GitFileGroupsProvider.UNGROUPED ? 'Files not in any group' : undefined;
+    // this.description = groupName === GitFileGroupsProvider.UNGROUPED ? 'Files not in any group' : undefined;
   }
 }

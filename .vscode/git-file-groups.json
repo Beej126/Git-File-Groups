@@ -1,0 +1,8 @@
+{
+  "groups": [
+    "fix #1"
+  ],
+  "assignments": {
+    "src/GitFileGroupsProvider.ts": "fix #1"
+  }
+}

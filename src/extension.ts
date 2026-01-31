@@ -72,10 +72,15 @@ export function activate(context: vscode.ExtensionContext) {
     console.log('[git-file-groups] Registering Tree Data Provider');
     const treeView = vscode.window.createTreeView('gitFileGroupsTreeView', {
         treeDataProvider: gitFileGroupsProvider,
-        showCollapseAll: true,
+        showCollapseAll: false,
         canSelectMany: true,
         dragAndDropController
     });
+
+    gitFileGroupsProvider.setTreeView(treeView);
+
+    // Initialize the context for the toggle button
+    vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
 
     context.subscriptions.push(treeView);
     context.subscriptions.push(gitFileGroupsProvider);
@@ -258,19 +263,39 @@ export function activate(context: vscode.ExtensionContext) {
                 });
                 console.log('[git-file-groups] vscode.open succeeded');
             } catch (fallbackError) {
-                console.log('[git-file-groups] vscode.open fallback failed:', fallbackError);
-            }
         }
-    });
+    }
+});
 
-    context.subscriptions.push(disposable);
-    context.subscriptions.push(createGroupCommand);
-    context.subscriptions.push(renameGroupCommand);
-    context.subscriptions.push(commitGroupCommand);
-    context.subscriptions.push(commitWithMessageCommand);
-    context.subscriptions.push(openDiffCommand);
-    context.subscriptions.push(openFileCommand);
+let toggleExpandCollapseCommand = vscode.commands.registerCommand('git-file-groups.toggleExpandCollapse', async () => {
+    console.log('[git-file-groups] Toggle command triggered!');
+    try {
+        await gitFileGroupsProvider.toggleExpandCollapse();
+        console.log('[git-file-groups] Toggle command completed');
+    } catch (error) {
+        console.error('[git-file-groups] Toggle command failed:', error);
+    }
+});
 
+let collapseAllGroupsCommand = vscode.commands.registerCommand('git-file-groups.collapseAllGroups', async () => {
+    console.log('[git-file-groups] Collapse command triggered!');
+    try {
+        await gitFileGroupsProvider.collapseAllGroups();
+        console.log('[git-file-groups] Collapse command completed');
+    } catch (error) {
+        console.error('[git-file-groups] Collapse command failed:', error);
+    }
+});
+
+context.subscriptions.push(disposable);
+context.subscriptions.push(createGroupCommand);
+context.subscriptions.push(renameGroupCommand);
+context.subscriptions.push(commitGroupCommand);
+context.subscriptions.push(commitWithMessageCommand);
+context.subscriptions.push(openDiffCommand);
+context.subscriptions.push(openFileCommand);
+context.subscriptions.push(toggleExpandCollapseCommand);
+context.subscriptions.push(collapseAllGroupsCommand);
 }
 
 export function deactivate() {

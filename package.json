@@ -1,6 +1,6 @@
 {
   "name": "git-file-groups",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Group source control changed files in VSCode tree view",
   "publisher": "Beej",
   "repository": "https://github.com/beej126/Git-File-Groups",
@@ -12,15 +12,14 @@
   "engines": {
     "vscode": "^1.76.0"
   },
+  "scripts": {
+    "watch": "tsc -watch -p ./",
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
   "activationEvents": [
-    "onView:gitFileGroupsTreeView",
-    "onCommand:git-file-groups.refreshGroup",
-    "onCommand:git-file-groups.createGroup",
-    "onCommand:git-file-groups.renameGroup",
-    "onCommand:git-file-groups.commitGroup",
-    "onCommand:git-file-groups.commitWithMessage",
-    "onCommand:git-file-groups.openFile",
-    "onCommand:git-file-groups.openDiff",
     "onGitChanged"
   ],
   "contributes": {
@@ -28,7 +27,8 @@
       "scm": [
         {
           "id": "gitFileGroupsTreeView",
-          "name": "Git File Groups"
+          "name": "Git File Groups",
+          "icon": "media/icon-view.svg"
         }
       ]
     },
@@ -36,10 +36,7 @@
       {
         "command": "git-file-groups.refreshGroup",
         "title": "Refresh",
-        "icon": {
-          "light": "media/icon-view.svg",
-          "dark": "media/icon-view.svg"
-        }
+        "icon": "$(refresh)"
       },
       {
         "command": "git-file-groups.createGroup",
@@ -68,6 +65,18 @@
         "command": "git-file-groups.openFile",
         "title": "Open File",
         "icon": "$(go-to-file)"
+      },
+      {
+        "command": "git-file-groups.toggleExpandCollapse",
+        "title": "Expand All",
+        "icon": "$(expand-all)",
+        "when": "gitFileGroups.isExpanded == false"
+      },
+      {
+        "command": "git-file-groups.collapseAllGroups",
+        "title": "Collapse All",
+        "icon": "$(collapse-all)",
+        "when": "gitFileGroups.isExpanded == true"
       }
     ],
     "menus": {
@@ -75,12 +84,22 @@
         {
           "command": "git-file-groups.refreshGroup",
           "when": "view == gitFileGroupsTreeView",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "git-file-groups.toggleExpandCollapse",
+          "when": "view == gitFileGroupsTreeView && gitFileGroups.isExpanded == false",
+          "group": "navigation@2"
+        },
+        {
+          "command": "git-file-groups.collapseAllGroups",
+          "when": "view == gitFileGroupsTreeView && gitFileGroups.isExpanded == true",
+          "group": "navigation@2"
         },
         {
           "command": "git-file-groups.createGroup",
           "when": "view == gitFileGroupsTreeView",
-          "group": "navigation"
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -111,13 +130,6 @@
         }
       ]
     }
-  },
-  "scripts": {
-    "watch": "tsc -watch -p ./",
-    "compile": "tsc -p ./",
-    "lint": "eslint src --ext ts",
-    "package": "vsce package",
-    "publish": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
