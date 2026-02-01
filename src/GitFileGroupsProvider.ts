@@ -17,7 +17,7 @@ interface GitAPI {
 }
 
 export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
-  public static readonly UNGROUPED = '{ungrouped}';
+  public static readonly UNGROUPED = 'default';
   private onDidChangeTreeDataEmitter = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 

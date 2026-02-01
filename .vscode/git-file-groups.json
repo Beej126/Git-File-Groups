@@ -1,8 +1,10 @@
 {
   "groups": [
-    "test1"
+    "test2"
   ],
   "assignments": {
-    ".vscode/git-file-groups.json": "test1"
+    "package.jsonc": "test2",
+    "package.json": "test2",
+    "src/GitFileGroupsProvider.ts": "test2"
   }
 }

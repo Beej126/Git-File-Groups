@@ -83,6 +83,11 @@
         "icon": "$(go-to-file)"
       },
       {
+        "command": "git-file-groups.discardChange",
+        "title": "Discard Changes",
+        "icon": "$(discard)"
+      },
+      {
         "command": "git-file-groups.toggleExpandCollapse",
         "title": "Expand All",
         "icon": "$(expand-all)",
@@ -117,14 +122,18 @@
           "when": "view == gitFileGroupsTreeView",
           "group": "navigation@3"
         }
-      ]
-      ,
-      "view/item/context": [ 
+      ],
+      "view/item/context": [ //comment
         {
-          "command": "git-file-groups.openFile",
-          "when": "view == gitFileGroupsTreeView && viewItem == file",
-          "group": "inline"
-        },
+            "command": "git-file-groups.openFile",
+            "when": "view == gitFileGroupsTreeView && viewItem == file",
+            "group": "inline"
+          },
+          {
+            "command": "git-file-groups.discardChange",
+            "when": "view == gitFileGroupsTreeView && viewItem == file",
+            "group": "inline"
+          },
         {
           "command": "git-file-groups.renameGroup",
           "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
@@ -152,6 +161,6 @@
     "eslint": "^9.39.2",
     "nodemon": "^3.1.11",
     "prettier": "^2.8.8",
-    "typescript": "^5.0.4"
+    "typescript": "^5.0.5"
   }
 }

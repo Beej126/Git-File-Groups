@@ -30,7 +30,23 @@ export function activate(context: vscode.ExtensionContext) {
             );
         },
         handleDrop: async (target: vscode.TreeItem | undefined, dataTransfer: vscode.DataTransfer) => {
-            if (!target || !(target instanceof GroupNode)) {
+            if (!target) {
+                return;
+            }
+
+            // Determine the target group: allow dropping onto the group header
+            // or anywhere on a file within the group (resolve parent group).
+            let targetGroupName: string | undefined;
+            if (target instanceof GroupNode) {
+                targetGroupName = target.groupName;
+            } else if (target instanceof FileNode) {
+                const parent = gitFileGroupsProvider.getParent(target);
+                if (parent instanceof GroupNode) {
+                    targetGroupName = parent.groupName;
+                }
+            }
+
+            if (!targetGroupName) {
                 return;
             }
 
@@ -52,7 +68,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             const uris = parsed.uris.map(u => vscode.Uri.parse(u));
-            await gitFileGroupsProvider.moveFilesToGroup(uris, target.groupName);
+            await gitFileGroupsProvider.moveFilesToGroup(uris, targetGroupName);
         }
         };
 
@@ -116,9 +132,43 @@ export function activate(context: vscode.ExtensionContext) {
         console.log('[git-file-groups] Git repositories still not ready after polling');
         };
 
-        waitForGitRepositories().then(() => {
+        waitForGitRepositories().then(async () => {
             console.log('[git-file-groups] Refreshing after Git repositories are ready');
             gitFileGroupsProvider.refresh();
+
+            // Subscribe to repository state changes so the view updates when files change
+            try {
+                const gitExtension = vscode.extensions.getExtension('vscode.git');
+                if (gitExtension && gitExtension.isActive) {
+                    const api = gitExtension.exports.getAPI(1);
+                    const repo = api.repositories.find((r: any) => {
+                        const repoPath = r.rootUri?.fsPath;
+                        return repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
+                    });
+
+                    if (repo && repo.state && typeof repo.state.onDidChange === 'function') {
+                        const disposable = repo.state.onDidChange(() => {
+                            console.log('[git-file-groups] Repository state changed - refreshing');
+                            gitFileGroupsProvider.refresh();
+                        });
+                        context.subscriptions.push(disposable);
+                    }
+
+                    // Listen for repositories being opened (in case the repo was added later)
+                    if (typeof api.onDidOpenRepository === 'function') {
+                        const d2 = api.onDidOpenRepository((r: any) => {
+                            const repoPath = r.rootUri?.fsPath;
+                            if (repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase()) {
+                                console.log('[git-file-groups] Repository opened - refreshing');
+                                gitFileGroupsProvider.refresh();
+                            }
+                        });
+                        context.subscriptions.push(d2);
+                    }
+                }
+            } catch (e) {
+                console.log('[git-file-groups] Failed to subscribe to Git events', e);
+            }
         });
     };
 
@@ -302,6 +352,52 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         }
     }
 });
+
+    let discardChangeCommand = vscode.commands.registerCommand('git-file-groups.discardChange', async (arg: vscode.Uri | vscode.TreeItem | undefined) => {
+        const resourceUri = arg instanceof vscode.Uri ? arg : arg instanceof vscode.TreeItem ? arg.resourceUri : undefined;
+        if (!resourceUri) {
+            return;
+        }
+
+        const fileName = resourceUri.fsPath.split(/[\\/]/).pop() || resourceUri.fsPath;
+        const confirmed = await vscode.window.showWarningMessage(
+            `Discard changes to ${fileName}? This cannot be undone.`,
+            { modal: true },
+            'Discard'
+        );
+
+        if (confirmed !== 'Discard') {
+            return;
+        }
+
+        try {
+            const gitExtension = vscode.extensions.getExtension('vscode.git');
+            if (!gitExtension) {
+                vscode.window.showErrorMessage('Git extension not available');
+                return;
+            }
+            if (!gitExtension.isActive) {
+                await gitExtension.activate();
+            }
+            const api = gitExtension.exports.getAPI(1);
+            const repository = api.repositories.find((repo: any) => {
+                const repoPath = repo.rootUri?.fsPath;
+                return repoPath && path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase() === path.normalize(repoPath).toLowerCase();
+            });
+            if (!repository) {
+                vscode.window.showErrorMessage('Repository not found for file');
+                return;
+            }
+
+            // Use repository.revert to discard the change (matches existing usage for unstaging)
+            await repository.revert([resourceUri.fsPath]);
+            vscode.window.showInformationMessage(`Discarded changes to ${fileName}`);
+            gitFileGroupsProvider.refresh();
+        } catch (e) {
+            console.log('[git-file-groups] Discard change failed:', e);
+            vscode.window.showErrorMessage(`Failed to discard changes: ${e}`);
+        }
+    });
 
 let toggleExpandCollapseCommand = vscode.commands.registerCommand('git-file-groups.toggleExpandCollapse', async () => {
     console.log('[git-file-groups] Toggle command triggered!');
