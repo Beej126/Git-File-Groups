@@ -195,6 +195,26 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         await gitFileGroupsProvider.commitGroup(groupNode.groupName);
     });
 
+    let deleteGroupCommand = vscode.commands.registerCommand('git-file-groups.deleteGroup', async (groupNode: GroupNode) => {
+        if (!groupNode || !groupNode.groupName) {
+            return;
+        }
+
+        if (groupNode.groupName === GitFileGroupsProvider.UNGROUPED) {
+            return; // Don't allow deleting the default group
+        }
+
+        const confirmed = await vscode.window.showWarningMessage(
+            `Delete group "${groupNode.groupName}"? This will move its files to ${GitFileGroupsProvider.UNGROUPED}.`,
+            { modal: true },
+            'Delete'
+        );
+
+        if (confirmed === 'Delete') {
+            await gitFileGroupsProvider.deleteGroup(groupNode.groupName);
+        }
+    });
+
     let commitWithMessageCommand = vscode.commands.registerCommand('git-file-groups.commitWithMessage', async () => {
         const message = await vscode.window.showInputBox({
             prompt: 'Commit message',
@@ -218,6 +238,8 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                 if (repository) {
                     await repository.commit(message);
                     console.log('[git-file-groups] Committed with message:', message);
+                    // Refresh view after commit so active changes and groups update
+                    gitFileGroupsProvider.refresh();
                 }
             }
         } catch (error) {
@@ -304,6 +326,7 @@ let collapseAllGroupsCommand = vscode.commands.registerCommand('git-file-groups.
     context.subscriptions.push(createGroupCommand);
     context.subscriptions.push(renameGroupCommand);
     context.subscriptions.push(commitGroupCommand);
+    context.subscriptions.push(deleteGroupCommand);
     context.subscriptions.push(commitWithMessageCommand);
     context.subscriptions.push(openDiffCommand);
     context.subscriptions.push(openFileCommand);

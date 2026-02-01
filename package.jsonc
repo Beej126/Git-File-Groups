@@ -55,7 +55,13 @@
       },
       {
         "command": "git-file-groups.renameGroup",
-        "title": "Rename"
+        "title": "Rename",
+        "icon": "$(pencil)"
+      },
+      {
+        "command": "git-file-groups.deleteGroup",
+        "title": "Delete Group",
+        "icon": "$(trash)"
       },
       {
         "command": "git-file-groups.commitGroup",
@@ -127,6 +133,11 @@
         {
           "command": "git-file-groups.commitGroup",
           "when": "view == gitFileGroupsTreeView && (viewItem == group || viewItem == ungrouped)",
+          "group": "inline"
+        },
+        {
+          "command": "git-file-groups.deleteGroup",
+          "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
           "group": "inline"
         }
       ]

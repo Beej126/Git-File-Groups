@@ -7,7 +7,7 @@ This isn't intended to be used for industrial grade project work where pull-requ
 ## Features
 
 - Sits as an additional panel in the Source Control view alongside Changes, Branches, etc
-- Grouping - create and rename
+- Groups can be created, renamed, deleted and files drag/dropped
 - File Diff and File Open just like main 'Changes' panel
 - Commit a group - stages ONLY the group files and initiates commit flow.
 

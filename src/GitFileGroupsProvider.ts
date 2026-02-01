@@ -247,6 +247,31 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     this.refresh();
   }
 
+  async deleteGroup(groupName: string): Promise<void> {
+    const trimmed = groupName.trim();
+    if (!trimmed || trimmed === GitFileGroupsProvider.UNGROUPED) {
+      return;
+    }
+
+    const index = this.groups.indexOf(trimmed);
+    if (index === -1) {
+      return;
+    }
+
+    // Remove the group
+    this.groups.splice(index, 1);
+
+    // Move any assignments back to ungrouped by deleting the assignment entries
+    for (const [key, value] of Object.entries(this.assignments)) {
+      if (value === trimmed) {
+        delete this.assignments[key];
+      }
+    }
+
+    await this.saveData();
+    this.refresh();
+  }
+
   async commitGroup(groupName: string): Promise<void> {
     const trimmed = groupName.trim();
     if (!trimmed || trimmed === GitFileGroupsProvider.UNGROUPED) {
@@ -332,6 +357,8 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     try {
       await repository.commit(message);
       log(`[commitGroup] Committed with message: ${message}`);
+      // Refresh view after commit so active changes reflect repository state
+      this.refresh();
     } catch (error) {
       log(`[commitGroup] Direct commit failed: ${error}`);
     }
@@ -444,9 +471,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     log('Getting top-level groups');
     const groups: vscode.TreeItem[] = [];
-    groups.push(new GroupNode(GitFileGroupsProvider.UNGROUPED, true));
+    const files = await this.getGroupedFiles();
+    groups.push(new GroupNode(GitFileGroupsProvider.UNGROUPED, true, files.ungrouped.length));
     for (const groupName of this.groups) {
-      groups.push(new GroupNode(groupName, true));
+      const count = (files.grouped[groupName] || []).length;
+      groups.push(new GroupNode(groupName, true, count));
     }
     return groups;
   }
@@ -671,10 +700,14 @@ export class FileNode extends vscode.TreeItem {
 export class GroupNode extends vscode.TreeItem {
   constructor(
     public readonly groupName: string,
-    isExpanded: boolean = true
+    isExpanded: boolean = true,
+    public readonly count?: number
   ) {
     super(groupName, isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
     this.contextValue = groupName === GitFileGroupsProvider.UNGROUPED ? 'ungrouped' : 'group';
+    if (typeof count === 'number') {
+      this.label = `${groupName} (${count})`;
+    }
     // this.description = groupName === GitFileGroupsProvider.UNGROUPED ? 'Files not in any group' : undefined;
   }
 }
