@@ -1,0 +1,11 @@
+{
+  "emeraldwalk.runonsave": {
+    "commands": [
+      {
+        "match": "package.jsonc$",
+        "cmd": "node ${workspaceFolder}/scripts/convert-package.js",
+        "isAsync": false
+      }
+    ]
+  }
+}
