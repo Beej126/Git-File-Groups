@@ -1,10 +1,15 @@
 {
+  "links": [
+    {
+      "#(?<WorkItemId>[0-9]+)": "https://dev.azure.com/KingCounty-EnvironmentalLab/Kraken/_workitems/edit/$WorkItemId"
+    }
+  ],
   "groups": [
-    "test2"
+    "fixes #16751"
   ],
   "assignments": {
-    "package.jsonc": "test2",
-    "package.json": "test2",
-    "src/GitFileGroupsProvider.ts": "test2"
+    "package.jsonc": "fixes #16751",
+    "package.json": "fixes #16751",
+    "src/GitFileGroupsProvider.ts": "fixes #16751"
   }
 }

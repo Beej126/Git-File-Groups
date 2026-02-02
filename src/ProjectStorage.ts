@@ -129,4 +129,21 @@ export class ProjectStorage {
   getStoragePath(): string {
     return this.storagePath;
   }
+
+  /**
+   * Load raw config from the storage file (returns parsed JSON or empty object)
+   */
+  async loadConfig(): Promise<any> {
+    try {
+      if (!fs.existsSync(this.storagePath)) {
+        return {};
+      }
+      const content = await fs.promises.readFile(this.storagePath, 'utf8');
+      const data = JSON.parse(content);
+      return data || {};
+    } catch (error) {
+      console.error('[git-file-groups] Error loading project config:', error);
+      return {};
+    }
+  }
 }

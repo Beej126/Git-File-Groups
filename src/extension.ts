@@ -265,6 +265,22 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         }
     });
 
+    let openLinkCommand = vscode.commands.registerCommand('git-file-groups.openLink', async (url: string) => {
+        if (!url) {
+            return;
+        }
+        try {
+            await vscode.env.openExternal(vscode.Uri.parse(url));
+        } catch (e) {
+            console.log('[git-file-groups] openLink failed:', e);
+            try {
+                await vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(url));
+            } catch (e2) {
+                console.log('[git-file-groups] fallback open failed:', e2);
+            }
+        }
+    });
+
     let commitWithMessageCommand = vscode.commands.registerCommand('git-file-groups.commitWithMessage', async () => {
         const message = await vscode.window.showInputBox({
             prompt: 'Commit message',
@@ -423,6 +439,7 @@ let collapseAllGroupsCommand = vscode.commands.registerCommand('git-file-groups.
     context.subscriptions.push(renameGroupCommand);
     context.subscriptions.push(commitGroupCommand);
     context.subscriptions.push(deleteGroupCommand);
+    context.subscriptions.push(openLinkCommand);
     context.subscriptions.push(commitWithMessageCommand);
     context.subscriptions.push(openDiffCommand);
     context.subscriptions.push(openFileCommand);

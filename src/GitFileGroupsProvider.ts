@@ -335,9 +335,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
 
     // Show input box for commit message and commit directly
+    // Prefill the input with the group name so it's the default commit message
     const message = await vscode.window.showInputBox({
       prompt: 'Commit message',
-      placeHolder: 'Enter commit message...'
+      placeHolder: 'Enter commit message...',
+      value: trimmed
     });
 
     if (!message) {
@@ -472,10 +474,82 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     log('Getting top-level groups');
     const groups: vscode.TreeItem[] = [];
     const files = await this.getGroupedFiles();
-    groups.push(new GroupNode(GitFileGroupsProvider.UNGROUPED, true, files.ungrouped.length));
+
+    // Load per-project config (may include "links")
+    let config: any = {};
+    try {
+      config = await this.storage.loadConfig();
+    } catch (e) {
+      log(`Failed to load project config: ${e}`);
+      config = {};
+    }
+
+    const linkDefinitions: Array<Record<string, string>> = Array.isArray(config.links) ? config.links : [];
+
+    const makeNode = (name: string, count: number) => {
+      const node = new GroupNode(name, true, count);
+
+      // show count on the right side (description)
+      node.description = count > 0 ? `(${count})` : undefined;
+
+      // Resolve links for this group based on configured link definitions.
+      try {
+        const urls: string[] = [];
+        for (const def of linkDefinitions) {
+          for (const [pattern, template] of Object.entries(def || {})) {
+            try {
+              const re = new RegExp(pattern);
+              const m = re.exec(name);
+              if (m) {
+                let url = template;
+                // Replace named groups like $GroupName
+                url = url.replace(/\$(\w+)/g, (_: string, gname: string) => {
+                  // Try named capture groups first
+                  const groups = (m as any).groups as Record<string, string> | undefined;
+                  if (groups && gname in groups) {
+                    return groups[gname] ?? '';
+                  }
+                  // Fallback to numeric groups (1-based)
+                  const idx = Number(gname);
+                  if (!Number.isNaN(idx) && m[idx] !== undefined) {
+                    return m[idx] ?? '';
+                  }
+                  return '';
+                });
+                urls.push(url);
+              }
+            } catch (reErr) {
+              log(`Invalid link regexp '${pattern}': ${reErr}`);
+            }
+          }
+        }
+
+        if (urls.length > 0) {
+          // Attach first URL as the default click action
+          const uri = vscode.Uri.parse(urls[0]);
+          node.command = {
+            command: 'git-file-groups.openLink',
+            title: 'Open Link',
+            arguments: [urls[0]]
+          } as vscode.Command;
+
+          // Tooltip with all links as Markdown
+          const md = new vscode.MarkdownString(urls.map(u => `[${u}](${u})`).join('\n\n'));
+          md.isTrusted = true;
+          node.tooltip = md;
+          node.label = `${name} 🔗`;
+        }
+      } catch (linkErr) {
+        log(`Error resolving links for group ${name}: ${linkErr}`);
+      }
+
+      return node;
+    };
+
+    groups.push(makeNode(GitFileGroupsProvider.UNGROUPED, files.ungrouped.length));
     for (const groupName of this.groups) {
       const count = (files.grouped[groupName] || []).length;
-      groups.push(new GroupNode(groupName, true, count));
+      groups.push(makeNode(groupName, count));
     }
     return groups;
   }
@@ -705,9 +779,6 @@ export class GroupNode extends vscode.TreeItem {
   ) {
     super(groupName, isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
     this.contextValue = groupName === GitFileGroupsProvider.UNGROUPED ? 'ungrouped' : 'group';
-    if (typeof count === 'number') {
-      this.label = `${groupName} (${count})`;
-    }
     // this.description = groupName === GitFileGroupsProvider.UNGROUPED ? 'Files not in any group' : undefined;
   }
 }

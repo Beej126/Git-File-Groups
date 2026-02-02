@@ -123,17 +123,17 @@
           "group": "navigation@3"
         }
       ],
-      "view/item/context": [ //comment
+      "view/item/context": [
         {
-            "command": "git-file-groups.openFile",
-            "when": "view == gitFileGroupsTreeView && viewItem == file",
-            "group": "inline"
-          },
-          {
-            "command": "git-file-groups.discardChange",
-            "when": "view == gitFileGroupsTreeView && viewItem == file",
-            "group": "inline"
-          },
+          "command": "git-file-groups.openFile",
+          "when": "view == gitFileGroupsTreeView && viewItem == file",
+          "group": "inline@1"
+        },
+        {
+          "command": "git-file-groups.discardChange",
+          "when": "view == gitFileGroupsTreeView && viewItem == file",
+          "group": "inline@2"
+        },
         {
           "command": "git-file-groups.renameGroup",
           "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
