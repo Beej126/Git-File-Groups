@@ -1,16 +1,21 @@
 
-Write-Host 'bump version? (y/N): ' -NoNewline
-if ($host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown').Character -in 'y','Y') {
-    node ./scripts/bump-version.js
-    git add package.json package.jsonc
-    $newver = $(node -e "console.log(require('./package.json').version)")
-    git commit -m "chore(release): v$newver"
-    git tag -a v$newver -m "release"
-}
-else {
-    git add -A
-    git commit
-}
+# Write-Host 'bump version? (y/N): ' -NoNewline
+# if ($host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown').Character -in 'y','Y') {
+
+node ./scripts/bump-version.js
+
+# git add package.json package.jsonc
+git add -A
+
+$newver = $(node -e "console.log(require('./package.json').version)")
+git commit -m "chore(release): v$newver"
+git tag -a v$newver -m "release"
+
+# }
+# else {
+#     git add -A
+#     git commit
+# }
 
 git push origin HEAD
 git push origin --tags
