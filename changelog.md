@@ -1,0 +1,1 @@
+2026-02-01: added links section to git-file-groups.json. hopefully self explanatory. define hyperlinks from group title patterns to link out to ALM portals like azure devops, jira, etc.
