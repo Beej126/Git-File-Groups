@@ -1,7 +1,6 @@
 {
     "logged_features": [
         //lifecycle, view, git, config, git-discard
-        "git-discard"
     ],
 
     "allow_cli_fallback": true,
