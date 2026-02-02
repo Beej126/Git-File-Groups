@@ -1,0 +1,15 @@
+# Exclude CI, scripts and workspace config files not needed in the VSIX
+.github/
+.vscode/
+.svn/
+.gitattributes
+.gitignore
+scripts/
+save-global-configs/
+**/node_modules/**
+*.vsix
+package.jsonc
+pnpm-lock.yaml
+.vsce*
+**/*.code-workspace
+tsconfig.json
