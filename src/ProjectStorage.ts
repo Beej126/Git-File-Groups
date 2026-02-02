@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { log } from './logging';
 
 export interface GitFileGroupsData {
   groups: string[];
@@ -8,7 +9,20 @@ export interface GitFileGroupsData {
 }
 
 export class ProjectStorage {
-  private static readonly STORAGE_FILE = '.vscode/git-file-groups.json';
+  private static readonly STORAGE_FILE = '.vscode/git-file-groups.jsonc';
+
+  /**
+   * Very small, permissive JSONC comment stripper for allowing // and C-style block comments
+   * before parsing JSON. This is deliberately simple (regex-based) but sufficient
+   * for lightweight project config files where a full JSONC parser isn't required.
+   */
+  private stripJsonComments(content: string): string {
+    // remove /* ... */ comments
+    content = content.replace(/\/\*[\s\S]*?\*\//g, '');
+    // remove //... comments
+    content = content.replace(/(^|[^:"'])\/\/.*$/gm, (m, g1) => g1 ?? '');
+    return content;
+  }
 
   private storagePath: string;
 
@@ -70,7 +84,8 @@ export class ProjectStorage {
       }
 
       const content = await fs.promises.readFile(this.storagePath, 'utf8');
-      const data = JSON.parse(content);
+      const stripped = this.stripJsonComments(content);
+      const data = JSON.parse(stripped);
       
       const assignments = typeof data.assignments === 'object' ? data.assignments : {};
       
@@ -79,7 +94,7 @@ export class ProjectStorage {
         assignments: this.denormalizeAssignmentsFromStorage(assignments)
       };
     } catch (error) {
-      console.error('[git-file-groups] Error loading project data:', error);
+      log(`Error loading project data: ${error}`, 'config');
       return { groups: [], assignments: {} };
     }
   }
@@ -93,7 +108,7 @@ export class ProjectStorage {
       }, null, 2);
       await fs.promises.writeFile(this.storagePath, content, 'utf8');
     } catch (error) {
-      console.error('[git-file-groups] Error saving project data:', error);
+      log(`Error saving project data: ${error}`, 'config');
       throw error;
     }
   }
@@ -121,7 +136,7 @@ export class ProjectStorage {
 
       return true;
     } catch (error) {
-      console.error('[git-file-groups] Error migrating from global state:', error);
+      log(`Error migrating from global state: ${error}`, 'config');
       return false;
     }
   }
@@ -139,10 +154,11 @@ export class ProjectStorage {
         return {};
       }
       const content = await fs.promises.readFile(this.storagePath, 'utf8');
-      const data = JSON.parse(content);
+      const stripped = this.stripJsonComments(content);
+      const data = JSON.parse(stripped);
       return data || {};
     } catch (error) {
-      console.error('[git-file-groups] Error loading project config:', error);
+      log(`Error loading project config: ${error}`, 'config');
       return {};
     }
   }

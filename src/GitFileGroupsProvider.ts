@@ -1,16 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { ProjectStorage, GitFileGroupsData } from './ProjectStorage';
-
-// Create output channel for logging
-const outputChannel = vscode.window.createOutputChannel('Git File Groups');
-
-function log(message: string) {
-  const timestamp = new Date().toISOString();
-  const formattedMessage = `[${timestamp}] ${message}`;
-  console.log('[git-file-groups]', message);
-  outputChannel.appendLine(formattedMessage);
-}
+import { log, setLoggedFeatures } from './logging';
 
 interface GitAPI {
   getAPI(version: number): any;
@@ -26,6 +17,8 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private cachedRepositoryRoot: string | undefined;
   private storage: ProjectStorage;
   private treeView: vscode.TreeView<vscode.TreeItem> | undefined;
+  private debugLoggingEnabled: boolean = false;
+  private loggedFeatures: Set<string> = new Set();
 
   private async executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
     for (const commandId of commandIds) {
@@ -35,7 +28,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         // If the command is not found, try next. Otherwise log and try next.
-        log(`${commandId} failed: ${message}`);
+        log(`${commandId} failed: ${message}`, 'view');
       }
     }
     return false;
@@ -52,7 +45,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         try {
           await this.treeView.reveal(item, { select: false, focus: false, expand: true });
         } catch (e) {
-          log(`Failed to expand root ${item.label}: ${e instanceof Error ? e.message : String(e)}`);
+          log(`Failed to expand root ${item.label}: ${e instanceof Error ? e.message : String(e)}`, 'view');
         }
       }
     }
@@ -66,27 +59,27 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         .sort((a, b) => a.localeCompare(b));
 
       // Log a small hint for debugging.
-      log(`expandAll discovery candidates: ${candidates.slice(0, 10).join(', ')}`);
+      log(`expandAll discovery candidates: ${candidates.slice(0, 10).join(', ')}`, 'view');
 
       for (const cmd of candidates) {
         try {
           await vscode.commands.executeCommand(cmd);
-          log(`expandAll succeeded via ${cmd}`);
+          log(`expandAll succeeded via ${cmd}`, 'view');
           return true;
         } catch {
           // keep trying
         }
       }
     } catch (e) {
-      log(`expandAll discovery failed: ${e instanceof Error ? e.message : String(e)}`);
+      log(`expandAll discovery failed: ${e instanceof Error ? e.message : String(e)}`, 'view');
     }
 
     return false;
   }
 
   constructor(private workspaceRoot: string, private state: vscode.Memento) {
-    log(`GitFileGroupsProvider constructor called with workspaceRoot: ${this.workspaceRoot}`);
-    log(`Constructor timestamp: ${new Date().toISOString()}`);
+      log(`GitFileGroupsProvider constructor called with workspaceRoot: ${this.workspaceRoot}`, 'lifecycle');
+    log(`Constructor timestamp: ${new Date().toISOString()}`, 'lifecycle');
     
     this.storage = new ProjectStorage(workspaceRoot);
     this.initializeStorage().then(() => {
@@ -94,11 +87,23 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     });
   }
 
+  /**
+   * Expose raw project config for extension-level decisions.
+   */
+  async getRawConfig(): Promise<any> {
+    try {
+      return await this.storage.loadConfig();
+    } catch (e) {
+      log(`Failed to load raw config: ${e}`, 'config');
+      return {};
+    }
+  }
+
   private async initializeStorage(): Promise<void> {
     // Try to migrate from global state first
     const migrated = await this.storage.migrateFromGlobalState(this.state);
     if (migrated) {
-      log('Successfully migrated data from global state to project file');
+      log('Successfully migrated data from global state to project file', 'lifecycle');
     }
     
     // Load data from project file
@@ -109,6 +114,16 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     const data = await this.storage.loadData();
     this.groups = data.groups || [];
     this.assignments = data.assignments || {};
+
+    // Load raw config to pick up logged features
+    try {
+      const cfg = await this.storage.loadConfig();
+      const features: string[] | undefined = Array.isArray(cfg.logged_features) ? cfg.logged_features : undefined;
+      this.loggedFeatures = new Set((features || []).filter(f => typeof f === 'string' && f.trim().length > 0).map(f => f.trim()));
+      setLoggedFeatures(features);
+    } catch (e) {
+      // ignore and keep defaults
+    }
   }
 
   private async saveData(): Promise<void> {
@@ -132,10 +147,10 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   async toggleExpandCollapse(): Promise<void> {
-    log('toggleExpandCollapse called');
+    log('toggleExpandCollapse called', 'view');
 
     if (!this.treeView) {
-      log('No treeView available');
+      log('No treeView available', 'view');
       return;
     }
 
@@ -147,7 +162,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       try {
         await this.treeView.reveal(first, { focus: true, select: false, expand: false });
       } catch (e) {
-        log(`Failed to focus tree view via reveal: ${e}`);
+        log(`Failed to focus tree view via reveal: ${e}`, 'view');
       }
     }
 
@@ -166,14 +181,14 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     // After expanding, show the Collapse button.
     await vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
-    log('toggleExpandCollapse completed');
+    log('toggleExpandCollapse completed', 'view');
   }
 
   async collapseAllGroups(): Promise<void> {
-    log('collapseAllGroups called');
+    log('collapseAllGroups called', 'view');
 
     if (!this.treeView) {
-      log('No treeView available');
+      log('No treeView available', 'view');
       return;
     }
 
@@ -184,7 +199,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       try {
         await this.treeView.reveal(first, { focus: true, select: false, expand: false });
       } catch (e) {
-        log(`Failed to focus tree view via reveal: ${e}`);
+        log(`Failed to focus tree view via reveal: ${e}`, 'view');
       }
     }
 
@@ -197,12 +212,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     // After collapsing, show the Expand button.
     await vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', false);
-    log('collapseAllGroups completed');
+    log('collapseAllGroups completed', 'view');
   }
 
   refresh(): void {
-    log('Refresh method called');
-    log('Firing tree data change event');
+    log('Refresh method called', 'view');
+    log('Firing tree data change event', 'view');
     this.onDidChangeTreeDataEmitter.fire(undefined);
   }
 
@@ -280,7 +295,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     const gitExtension = vscode.extensions.getExtension<GitAPI>('vscode.git');
     if (!gitExtension) {
-      log('Git extension not available for commitGroup');
+      log('Git extension not available for commitGroup', 'git');
       return;
     }
     if (!gitExtension.isActive) {
@@ -294,12 +309,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return repoPath && path.normalize(this.workspaceRoot).toLowerCase() === path.normalize(repoPath).toLowerCase();
     });
     if (!repository) {
-      log('No repository found for commitGroup');
+      log('No repository found for commitGroup', 'git');
       return;
     }
 
-    log(`[commitGroup] Repository object keys: ${Object.keys(repository).join(', ')}`);
-    log(`[commitGroup] Repository.index: ${repository.index}`);
+    log(`[commitGroup] Repository object keys: ${Object.keys(repository).join(', ')}`, 'git');
+    log(`[commitGroup] Repository.index: ${repository.index}`, 'git');
 
     // Get all current changes and group files
     const allChanges = await this.loadGitFileEntries();
@@ -308,30 +323,51 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       (groupFiles.grouped[trimmed] || []).map(f => f.resourceUri)
     );
 
-    log(`[commitGroup] Group: ${trimmed}`);
-    log(`[commitGroup] All changes count: ${allChanges.length}`);
-    log(`[commitGroup] Target files to stage: ${targetUris.size}`);
+    log(`[commitGroup] Group: ${trimmed}`, 'git');
+    log(`[commitGroup] All changes count: ${allChanges.length}`, 'git');
+    log(`[commitGroup] Target files to stage: ${targetUris.size}`, 'git');
     for (const uri of targetUris) {
-      log(`[commitGroup] Target URI: ${uri}`);
+      log(`[commitGroup] Target URI: ${uri}`, 'git');
     }
 
     // Unstage all changes first using repository.revert
     for (const change of allChanges) {
-      log(`[commitGroup] Unstaging: ${change.resourceUri}`);
+      log(`[commitGroup] Unstaging: ${change.resourceUri}`, 'git');
       try {
-        await repository.revert([change.resourceUri.fsPath]);
+        // Log state before each unstage attempt for diagnostics
+        try {
+          const s = repository.state;
+          const w = (s?.workingTreeChanges || []).map((c: any) => c.resourceUri?.fsPath ?? c.uri?.fsPath ?? c.path).filter(Boolean);
+          const i = (s?.indexChanges || []).map((c: any) => c.resourceUri?.fsPath ?? c.uri?.fsPath ?? c.path).filter(Boolean);
+          log(`[commitGroup] pre-unstage working: ${w.join(', ')}`, 'git');
+          log(`[commitGroup] pre-unstage index: ${i.join(', ')}`, 'git');
+        } catch {}
+
+        // Try fsPath first, then Uri for compatibility across different Git API implementations
+        try {
+          await repository.revert([change.resourceUri.fsPath]);
+          log(`Unstaged (fsPath): ${change.resourceUri.fsPath}`, 'git');
+        } catch (e1) {
+          log(`Unstage with fsPath failed: ${e1}`, 'git');
+          try {
+            await repository.revert([change.resourceUri]);
+            log(`Unstaged (Uri): ${change.resourceUri.fsPath}`, 'git');
+          } catch (e2) {
+            log(`Failed to unstage ${change.resourceUri.fsPath}: ${e2}`, 'git');
+          }
+        }
       } catch (e) {
-        log(`Failed to unstage ${change.resourceUri.fsPath}: ${e}`);
+        log(`Failed to unstage ${change.resourceUri.fsPath}: ${e}`, 'git');
       }
     }
 
     // Stage only files in the target group using repository.add
     const filePathsToStage = Array.from(targetUris).map(uri => uri.fsPath);
-    log(`[commitGroup] Staging files: ${filePathsToStage.join(', ')}`);
+    log(`[commitGroup] Staging files: ${filePathsToStage.join(', ')}`, 'git');
     try {
       await repository.add(filePathsToStage);
     } catch (e) {
-      log(`Failed to stage files: ${e}`);
+      log(`Failed to stage files: ${e}`, 'git');
     }
 
     // Show input box for commit message and commit directly
@@ -344,13 +380,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     if (!message) {
       // User cancelled - unstage all changes to restore original state
-      log(`[commitGroup] User cancelled, unstaging all changes`);
+      log(`[commitGroup] User cancelled, unstaging all changes`, 'git');
       for (const change of allChanges) {
-        log(`[commitGroup] Unstaging (cancel): ${change.resourceUri}`);
+        log(`[commitGroup] Unstaging (cancel): ${change.resourceUri}`, 'git');
         try {
           await repository.revert([change.resourceUri.fsPath]);
         } catch (e) {
-          log(`Failed to unstage ${change.resourceUri.fsPath}: ${e}`);
+          log(`Failed to unstage ${change.resourceUri.fsPath}: ${e}`, 'git');
         }
       }
       return; // User cancelled
@@ -358,18 +394,18 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     try {
       await repository.commit(message);
-      log(`[commitGroup] Committed with message: ${message}`);
+      log(`[commitGroup] Committed with message: ${message}`, 'git');
       // Refresh view after commit so active changes reflect repository state
       this.refresh();
     } catch (error) {
-      log(`[commitGroup] Direct commit failed: ${error}`);
+      log(`[commitGroup] Direct commit failed: ${error}`, 'git');
     }
   }
 
   async stageAllChanges(): Promise<void> {
     const gitExtension = vscode.extensions.getExtension<GitAPI>('vscode.git');
     if (!gitExtension) {
-      log('Git extension not available for stageAllChanges');
+      log('Git extension not available for stageAllChanges', 'git');
       return;
     }
     if (!gitExtension.isActive) {
@@ -383,18 +419,18 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return repoPath && path.normalize(this.workspaceRoot).toLowerCase() === path.normalize(repoPath).toLowerCase();
     });
     if (!repository) {
-      log('No repository found for stageAllChanges');
+      log('No repository found for stageAllChanges', 'git');
       return;
     }
 
     // Get all current changes and stage them
     const allChanges = await this.loadGitFileEntries();
     const filePathsToStage = allChanges.map(change => change.resourceUri.fsPath);
-    log(`[stageAllChanges] Staging all changes: ${filePathsToStage.join(', ')}`);
+    log(`[stageAllChanges] Staging all changes: ${filePathsToStage.join(', ')}`, 'git');
     try {
       await repository.add(filePathsToStage);
     } catch (e) {
-      log(`Failed to stage all changes: ${e}`);
+      log(`Failed to stage all changes: ${e}`, 'git');
     }
   }
 
@@ -457,11 +493,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   async getChildren(element?: vscode.TreeItem | undefined): Promise<vscode.TreeItem[]> {
-    log(`getChildren called with element: ${element ? element.label : 'undefined'}`);
-    log(`getChildren timestamp: ${new Date().toISOString()}`);
+    log(`getChildren called with element: ${element ? element.label : 'undefined'}`, 'view');
+    log(`getChildren timestamp: ${new Date().toISOString()}`, 'view');
 
     if (element instanceof GroupNode) {
-      log(`Returning children for GroupNode: ${element.groupName}`);
+      log(`Returning children for GroupNode: ${element.groupName}`, 'view');
       const files = await this.getGroupedFiles();
       const groupName = element.groupName;
       const fileEntries = groupName === GitFileGroupsProvider.UNGROUPED
@@ -471,7 +507,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return fileEntries.map(entry => new FileNode(entry.fileName, entry.resourceUri));
     }
 
-    log('Getting top-level groups');
+    log('Getting top-level groups', 'view');
     const groups: vscode.TreeItem[] = [];
     const files = await this.getGroupedFiles();
 
@@ -480,7 +516,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     try {
       config = await this.storage.loadConfig();
     } catch (e) {
-      log(`Failed to load project config: ${e}`);
+      log(`Failed to load project config: ${e}`, 'config');
       config = {};
     }
 
@@ -496,7 +532,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       try {
         const urls: string[] = [];
         for (const def of linkDefinitions) {
-          for (const [pattern, template] of Object.entries(def || {})) {
+              for (const [pattern, template] of Object.entries(def || {})) {
             try {
               const re = new RegExp(pattern);
               const m = re.exec(name);
@@ -517,9 +553,9 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
                   return '';
                 });
                 urls.push(url);
-              }
+                }
             } catch (reErr) {
-              log(`Invalid link regexp '${pattern}': ${reErr}`);
+              log(`Invalid link regexp '${pattern}': ${reErr}`, 'config');
             }
           }
         }
@@ -540,7 +576,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
           node.label = `${name} 🔗`;
         }
       } catch (linkErr) {
-        log(`Error resolving links for group ${name}: ${linkErr}`);
+        log(`Error resolving links for group ${name}: ${linkErr}`, 'config');
       }
 
       return node;
@@ -609,12 +645,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     try {
       const gitExtension = vscode.extensions.getExtension<GitAPI>('vscode.git');
       if (!gitExtension) {
-        log('Git extension not found');
+        log('Git extension not found', 'git');
         return [];
       }
 
       if (!gitExtension.isActive) {
-        log('Activating Git extension...');
+        log('Activating Git extension...', 'git');
         await gitExtension.activate();
       }
 
@@ -625,8 +661,8 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         await new Promise(resolve => setTimeout(resolve, 200));
       }
 
-      log(`Available repositories: ${api.repositories.map((repo: any) => repo.rootUri?.fsPath).join(', ')}`);
-      log(`Looking for workspace root: ${this.workspaceRoot}`);
+      log(`Available repositories: ${api.repositories.map((repo: any) => repo.rootUri?.fsPath).join(', ')}`, 'git');
+      log(`Looking for workspace root: ${this.workspaceRoot}`, 'git');
 
       const normalizeFsPath = (p: string) => path.normalize(p).toLowerCase();
 
@@ -645,7 +681,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
 
       if (!repository) {
-        log('No repository found immediately, waiting 500ms and retrying...');
+        log('No repository found immediately, waiting 500ms and retrying...', 'git');
         await new Promise(resolve => setTimeout(resolve, 500));
         repository = api.repositories.find((repo: any) => normalizeFsPath(repo.rootUri.fsPath) === normalizeFsPath(this.workspaceRoot))
           ?? api.repositories.find((repo: any) => {
@@ -659,7 +695,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
 
       if (!repository) {
-        log(`No Git repository found for workspace: ${this.workspaceRoot}`);
+          log(`No Git repository found for workspace: ${this.workspaceRoot}`, 'git');
         return [];
       }
 
@@ -679,14 +715,14 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
           changes = repository.workingTreeChanges || [];
         }
       } catch (statusError) {
-        log(`Error getting status: ${statusError}`);
+        log(`Error getting status: ${statusError}`, 'git');
         changes = [];
       }
 
-      log(`Repository status retrieved, changes count: ${changes.length}`);
+      log(`Repository status retrieved, changes count: ${changes.length}`, 'git');
 
       if (changes.length === 0 && repository.state) {
-        log(`Repository.state keys: ${Object.keys(repository.state).join(', ')}`);
+        log(`Repository.state keys: ${Object.keys(repository.state).join(', ')}`, 'git');
       }
 
       const entries: FileEntry[] = [];
@@ -703,12 +739,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
 
       if (changes.length > 0 && entries.length === 0) {
-        log(`No entries produced from changes. First change status: ${(changes[0] as any)?.status}`);
+        log(`No entries produced from changes. First change status: ${(changes[0] as any)?.status}`, 'git');
       }
 
       return entries.sort((a, b) => a.fileName.localeCompare(b.fileName));
     } catch (error) {
-      log(`Error accessing Git API: ${error}`);
+      log(`Error accessing Git API: ${error}`, 'git');
       return [];
     }
   }
