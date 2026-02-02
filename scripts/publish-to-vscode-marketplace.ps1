@@ -7,5 +7,9 @@ git tag -a v$newver -m "release"
 git push origin HEAD
 git push origin --tags
 
-npx vsce login Beej
+# Use pnpm to run vsce (avoids missing npx on some systems)
+pnpm exec -- vsce login Beej
+
+# Publish using the package.json "publish" script which runs vsce
+# To avoid storing the token locally, you can run: `pnpm run publish -- --pat <YOUR_PAT>`
 pnpm run publish
