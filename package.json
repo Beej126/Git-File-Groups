@@ -28,6 +28,7 @@
     "onCommand:git-file-groups.commitGroup",
     "onCommand:git-file-groups.commitWithMessage",
     "onCommand:git-file-groups.openFile",
+    "onCommand:git-file-groups.renameFile",
     "onCommand:git-file-groups.openDiff",
     "onStartupFinished",
     "workspaceContains:.git"
@@ -56,6 +57,11 @@
       {
         "command": "git-file-groups.renameGroup",
         "title": "Rename",
+        "icon": "$(pencil)"
+      },
+      {
+        "command": "git-file-groups.renameFile",
+        "title": "Rename File",
         "icon": "$(pencil)"
       },
       {
@@ -128,6 +134,11 @@
           "command": "git-file-groups.openFile",
           "when": "view == gitFileGroupsTreeView && viewItem == file",
           "group": "inline@1"
+        },
+        {
+          "command": "git-file-groups.renameFile",
+          "when": "view == gitFileGroupsTreeView && viewItem == file",
+          "group": "inline@2"
         },
         {
           "command": "git-file-groups.discardChange",

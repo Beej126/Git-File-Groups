@@ -133,6 +133,32 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     });
   }
 
+  /**
+   * Update internal assignments when a file has been renamed on disk.
+   */
+  async fileRenamed(oldUri: vscode.Uri, newUri: vscode.Uri): Promise<void> {
+    try {
+      const oldKey = this.toAssignmentKey(oldUri);
+      const newKey = this.toAssignmentKey(newUri);
+      if (!oldKey || !newKey) {
+        this.refresh();
+        return;
+      }
+
+      const assigned = this.assignments[oldKey];
+      if (assigned) {
+        this.assignments[newKey] = assigned;
+        delete this.assignments[oldKey];
+        await this.saveData();
+      }
+
+      this.refresh();
+    } catch (e) {
+      log(`fileRenamed failed: ${e}`, 'view');
+      this.refresh();
+    }
+  }
+
   getWorkspaceRoot(): string {
     return this.workspaceRoot;
   }

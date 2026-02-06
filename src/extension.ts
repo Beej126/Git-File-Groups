@@ -376,6 +376,42 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
     }
 });
 
+    let renameFileCommand = vscode.commands.registerCommand('git-file-groups.renameFile', async (arg: vscode.Uri | vscode.TreeItem | undefined) => {
+        const resourceUri = arg instanceof vscode.Uri ? arg : arg instanceof vscode.TreeItem ? arg.resourceUri : undefined;
+        if (!resourceUri) return;
+
+        const oldFs = resourceUri.fsPath;
+        const oldName = path.basename(oldFs);
+        const newName = await vscode.window.showInputBox({
+            prompt: 'Rename file',
+            value: oldName,
+            placeHolder: 'New file name'
+        });
+
+        if (typeof newName !== 'string' || newName.trim().length === 0 || newName === oldName) {
+            return;
+        }
+
+        const newFs = path.join(path.dirname(oldFs), newName);
+        const newUri = vscode.Uri.file(newFs);
+
+        try {
+            await vscode.workspace.fs.rename(resourceUri, newUri, { overwrite: false });
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to rename file: ${err && err.message ? err.message : String(err)}`);
+            return;
+        }
+
+        try {
+            if (gitFileGroupsProvider && typeof gitFileGroupsProvider.fileRenamed === 'function') {
+                await gitFileGroupsProvider.fileRenamed(resourceUri, newUri);
+            }
+        } catch (e) {
+            // ignore provider update errors but refresh view
+            try { gitFileGroupsProvider.refresh(); } catch {}
+        }
+    });
+
     let discardChangeCommand = vscode.commands.registerCommand('git-file-groups.discardChange', async (arg: vscode.Uri | vscode.TreeItem | undefined) => {
         const resourceUri = arg instanceof vscode.Uri ? arg : arg instanceof vscode.TreeItem ? arg.resourceUri : undefined;
         if (!resourceUri) return;
@@ -512,6 +548,7 @@ let collapseAllGroupsCommand = vscode.commands.registerCommand('git-file-groups.
     context.subscriptions.push(disposable);
     context.subscriptions.push(createGroupCommand);
     context.subscriptions.push(renameGroupCommand);
+    context.subscriptions.push(renameFileCommand);
     context.subscriptions.push(commitGroupCommand);
     context.subscriptions.push(deleteGroupCommand);
     context.subscriptions.push(openLinkCommand);
