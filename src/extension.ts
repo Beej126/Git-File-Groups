@@ -239,11 +239,17 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
     });
 
     let commitGroupCommand = vscode.commands.registerCommand('git-file-groups.commitGroup', async (groupNode: GroupNode) => {
+        log(`commitGroup command invoked. Arg present: ${!!groupNode}`, 'view');
         if (!groupNode || !groupNode.groupName) {
+            log('commitGroup called with invalid or missing groupNode', 'view');
             return;
         }
 
-        await gitFileGroupsProvider.commitGroup(groupNode.groupName);
+        try {
+            await gitFileGroupsProvider.commitGroup(groupNode.groupName);
+        } catch (err) {
+            log(`commitGroup handler failed: ${err}`, 'view');
+        }
     });
 
     let deleteGroupCommand = vscode.commands.registerCommand('git-file-groups.deleteGroup', async (groupNode: GroupNode) => {

@@ -1,6 +1,6 @@
 {
   "name": "git-file-groups",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Group source control changed files in VSCode tree view",
   "publisher": "Beej",
   "repository": "https://github.com/beej126/Git-File-Groups",
@@ -141,7 +141,7 @@
         },
         {
           "command": "git-file-groups.commitGroup",
-          "when": "view == gitFileGroupsTreeView && (viewItem == group || viewItem == ungrouped)",
+          "when": "view == gitFileGroupsTreeView && (viewItem != file)",
           "group": "inline"
         },
         {

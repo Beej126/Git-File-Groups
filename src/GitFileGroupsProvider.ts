@@ -264,7 +264,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
   async deleteGroup(groupName: string): Promise<void> {
     const trimmed = groupName.trim();
-    if (!trimmed || trimmed === GitFileGroupsProvider.UNGROUPED) {
+    if (!trimmed) {
       return;
     }
 
@@ -289,9 +289,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
   async commitGroup(groupName: string): Promise<void> {
     const trimmed = groupName.trim();
-    if (!trimmed || trimmed === GitFileGroupsProvider.UNGROUPED) {
-      return;
-    }
 
     const gitExtension = vscode.extensions.getExtension<GitAPI>('vscode.git');
     if (!gitExtension) {
@@ -319,13 +316,19 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     // Get all current changes and group files
     const allChanges = await this.loadGitFileEntries();
     const groupFiles = await this.getGroupedFiles();
-    const targetUris = new Set(
-      (groupFiles.grouped[trimmed] || []).map(f => f.resourceUri)
-    );
+    const entriesForGroup = trimmed === GitFileGroupsProvider.UNGROUPED
+      ? groupFiles.ungrouped
+      : (groupFiles.grouped[trimmed] || []);
+    const targetUris = new Set(entriesForGroup.map(f => f.resourceUri));
 
     log(`[commitGroup] Group: ${trimmed}`, 'git');
     log(`[commitGroup] All changes count: ${allChanges.length}`, 'git');
     log(`[commitGroup] Target files to stage: ${targetUris.size}`, 'git');
+    if (targetUris.size === 0) {
+      log(`[commitGroup] No files found in group '${trimmed}', aborting commit.`, 'git');
+      vscode.window.showInformationMessage(`No files to commit in group '${trimmed}'.`);
+      return;
+    }
     for (const uri of targetUris) {
       log(`[commitGroup] Target URI: ${uri}`, 'git');
     }
