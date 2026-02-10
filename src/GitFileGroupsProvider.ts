@@ -822,11 +822,12 @@ export class FileNode extends vscode.TreeItem {
     public readonly resourceUri: vscode.Uri
   ) {
     super(fileName, vscode.TreeItemCollapsibleState.None);
+    this.description = vscode.workspace.asRelativePath(resourceUri, false);
     this.contextValue = 'file';
     this.resourceUri = resourceUri;
     this.command = {
-      command: 'git-file-groups.openDiff',
-      title: 'Open Diff',
+      command: 'git-file-groups.openFile',
+      title: 'Open File',
       arguments: [resourceUri]
     };
   }

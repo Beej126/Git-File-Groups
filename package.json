@@ -45,6 +45,7 @@
         }
       ]
     },
+    "//icons": "https://microsoft.github.io/vscode-codicons/dist/codicon.html",
     "commands": [
       {
         "command": "git-file-groups.refreshGroup",
@@ -83,12 +84,12 @@
       },
       {
         "command": "git-file-groups.openDiff",
-        "title": "Open Diff"
+        "title": "Open Diff",
+        "icon": "$(diff)"
       },
       {
         "command": "git-file-groups.openFile",
-        "title": "Open File",
-        "icon": "$(go-to-file)"
+        "title": "Open File"
       },
       {
         "command": "git-file-groups.discardChange",
@@ -163,7 +164,7 @@
           "group": "inline@4"
         },
         {
-          "command": "git-file-groups.openFile",
+          "command": "git-file-groups.openDiff",
           "when": "view == gitFileGroupsTreeView && viewItem == file",
           "group": "inline@5"
         },
