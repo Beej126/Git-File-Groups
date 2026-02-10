@@ -31,7 +31,9 @@
     "onCommand:git-file-groups.renameFile",
     "onCommand:git-file-groups.openDiff",
     "onStartupFinished",
-    "workspaceContains:.git"
+    "workspaceContains:.git",
+    "onCommand:git-file-groups.copyRelativePath",
+    "onCommand:git-file-groups.revealInExplorer"
   ],
   "contributes": {
     "views": {
@@ -104,6 +106,16 @@
         "title": "Collapse All",
         "icon": "$(collapse-all)",
         "when": "gitFileGroups.isExpanded == true"
+      },
+      {
+        "command": "git-file-groups.copyRelativePath",
+        "title": "Copy Relative Path",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "git-file-groups.revealInExplorer",
+        "title": "Reveal in Explorer View",
+        "icon": "$(list-tree)"
       }
     ],
     "menus": {
@@ -111,40 +123,51 @@
         {
           "command": "git-file-groups.refreshGroup",
           "when": "view == gitFileGroupsTreeView",
-          "group": "navigation@1"
+          "group": "navigation"
         },
         {
           "command": "git-file-groups.toggleExpandCollapse",
           "when": "view == gitFileGroupsTreeView && gitFileGroups.isExpanded == false",
-          "group": "navigation@2"
+          "group": "navigation"
         },
         {
           "command": "git-file-groups.collapseAllGroups",
           "when": "view == gitFileGroupsTreeView && gitFileGroups.isExpanded == true",
-          "group": "navigation@2"
+          "group": "navigation"
         },
         {
           "command": "git-file-groups.createGroup",
           "when": "view == gitFileGroupsTreeView",
-          "group": "navigation@3"
+          "group": "navigation"
         }
       ],
       "view/item/context": [
         {
-          "command": "git-file-groups.openFile",
+          "command": "git-file-groups.copyRelativePath",
           "when": "view == gitFileGroupsTreeView && viewItem == file",
           "group": "inline@1"
         },
         {
-          "command": "git-file-groups.renameFile",
+          "command": "git-file-groups.revealInExplorer",
           "when": "view == gitFileGroupsTreeView && viewItem == file",
           "group": "inline@2"
         },
         {
           "command": "git-file-groups.discardChange",
           "when": "view == gitFileGroupsTreeView && viewItem == file",
-          "group": "inline@2"
+          "group": "inline@3"
         },
+        {
+          "command": "git-file-groups.renameFile",
+          "when": "view == gitFileGroupsTreeView && viewItem == file",
+          "group": "inline@4"
+        },
+        {
+          "command": "git-file-groups.openFile",
+          "when": "view == gitFileGroupsTreeView && viewItem == file",
+          "group": "inline@5"
+        },
+
         {
           "command": "git-file-groups.renameGroup",
           "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
