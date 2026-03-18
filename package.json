@@ -129,12 +129,12 @@
         {
           "command": "git-file-groups.toggleExpandCollapse",
           "when": "view == gitFileGroupsTreeView && gitFileGroups.isExpanded == false",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "git-file-groups.collapseAllGroups",
           "when": "view == gitFileGroupsTreeView && gitFileGroups.isExpanded == true",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "git-file-groups.createGroup",

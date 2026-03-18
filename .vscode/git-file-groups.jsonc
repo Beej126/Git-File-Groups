@@ -1,9 +1,4 @@
 {
-  "groups": [
-    "fixes #16751"
-  ],
-  "assignments": {
-    "package.jsonc": "fixes #16751",
-    "package.json": "fixes #16751"
-  }
+  "groups": [],
+  "assignments": {}
 }

@@ -326,7 +326,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
     const api = gitExtension.exports.getAPI(1);
 
-    // Find repository
     const repository = api.repositories.find((repo: any) => {
       const repoPath = repo.rootUri?.fsPath;
       return repoPath && path.normalize(this.workspaceRoot).toLowerCase() === path.normalize(repoPath).toLowerCase();
@@ -339,8 +338,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     log(`[commitGroup] Repository object keys: ${Object.keys(repository).join(', ')}`, 'git');
     log(`[commitGroup] Repository.index: ${repository.index}`, 'git');
 
-    // Get all current changes and group files
-    const allChanges = await this.loadGitFileEntries();
     const groupFiles = await this.getGroupedFiles();
     const entriesForGroup = trimmed === GitFileGroupsProvider.UNGROUPED
       ? groupFiles.ungrouped
@@ -348,49 +345,39 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     const targetUris = new Set(entriesForGroup.map(f => f.resourceUri));
 
     log(`[commitGroup] Group: ${trimmed}`, 'git');
-    log(`[commitGroup] All changes count: ${allChanges.length}`, 'git');
     log(`[commitGroup] Target files to stage: ${targetUris.size}`, 'git');
     if (targetUris.size === 0) {
       log(`[commitGroup] No files found in group '${trimmed}', aborting commit.`, 'git');
       vscode.window.showInformationMessage(`No files to commit in group '${trimmed}'.`);
       return;
     }
+
     for (const uri of targetUris) {
       log(`[commitGroup] Target URI: ${uri}`, 'git');
     }
 
-    // Unstage all changes first using repository.revert
-    for (const change of allChanges) {
-      log(`[commitGroup] Unstaging: ${change.resourceUri}`, 'git');
-      try {
-        // Log state before each unstage attempt for diagnostics
-        try {
-          const s = repository.state;
-          const w = (s?.workingTreeChanges || []).map((c: any) => c.resourceUri?.fsPath ?? c.uri?.fsPath ?? c.path).filter(Boolean);
-          const i = (s?.indexChanges || []).map((c: any) => c.resourceUri?.fsPath ?? c.uri?.fsPath ?? c.path).filter(Boolean);
-          log(`[commitGroup] pre-unstage working: ${w.join(', ')}`, 'git');
-          log(`[commitGroup] pre-unstage index: ${i.join(', ')}`, 'git');
-        } catch {}
+    const stagedChanges = Array.isArray(repository?.state?.indexChanges) ? repository.state.indexChanges : [];
+    for (const change of stagedChanges) {
+      const changeUri = change.resourceUri ?? change.uri;
+      if (!changeUri) {
+        continue;
+      }
 
-        // Try fsPath first, then Uri for compatibility across different Git API implementations
+      log(`[commitGroup] Unstaging staged change: ${changeUri}`, 'git');
+      try {
+        await repository.revert([changeUri.fsPath ?? changeUri]);
+        log(`Unstaged staged change: ${changeUri.fsPath ?? String(changeUri)}`, 'git');
+      } catch (e1) {
+        log(`Unstage with primary resource failed: ${e1}`, 'git');
         try {
-          await repository.revert([change.resourceUri.fsPath]);
-          log(`Unstaged (fsPath): ${change.resourceUri.fsPath}`, 'git');
-        } catch (e1) {
-          log(`Unstage with fsPath failed: ${e1}`, 'git');
-          try {
-            await repository.revert([change.resourceUri]);
-            log(`Unstaged (Uri): ${change.resourceUri.fsPath}`, 'git');
-          } catch (e2) {
-            log(`Failed to unstage ${change.resourceUri.fsPath}: ${e2}`, 'git');
-          }
+          await repository.revert([changeUri]);
+          log(`Unstaged staged change via Uri: ${changeUri.fsPath ?? String(changeUri)}`, 'git');
+        } catch (e2) {
+          log(`Failed to unstage ${changeUri.fsPath ?? String(changeUri)}: ${e2}`, 'git');
         }
-      } catch (e) {
-        log(`Failed to unstage ${change.resourceUri.fsPath}: ${e}`, 'git');
       }
     }
 
-    // Stage only files in the target group using repository.add
     const filePathsToStage = Array.from(targetUris).map(uri => uri.fsPath);
     log(`[commitGroup] Staging files: ${filePathsToStage.join(', ')}`, 'git');
     try {
@@ -399,8 +386,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       log(`Failed to stage files: ${e}`, 'git');
     }
 
-    // Show input box for commit message and commit directly
-    // Prefill the input with the group name so it's the default commit message
     const message = await vscode.window.showInputBox({
       prompt: 'Commit message',
       placeHolder: 'Enter commit message...',
@@ -408,23 +393,25 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     });
 
     if (!message) {
-      // User cancelled - unstage all changes to restore original state
-      log(`[commitGroup] User cancelled, unstaging all changes`, 'git');
-      for (const change of allChanges) {
-        log(`[commitGroup] Unstaging (cancel): ${change.resourceUri}`, 'git');
+      log(`[commitGroup] User cancelled, restoring staged changes`, 'git');
+      for (const change of stagedChanges) {
+        const changeUri = change.resourceUri ?? change.uri;
+        if (!changeUri) {
+          continue;
+        }
+
         try {
-          await repository.revert([change.resourceUri.fsPath]);
+          await repository.revert([changeUri.fsPath ?? changeUri]);
         } catch (e) {
-          log(`Failed to unstage ${change.resourceUri.fsPath}: ${e}`, 'git');
+          log(`Failed to unstage ${changeUri.fsPath ?? String(changeUri)}: ${e}`, 'git');
         }
       }
-      return; // User cancelled
+      return;
     }
 
     try {
       await repository.commit(message);
       log(`[commitGroup] Committed with message: ${message}`, 'git');
-      // Refresh view after commit so active changes reflect repository state
       this.refresh();
     } catch (error) {
       log(`[commitGroup] Direct commit failed: ${error}`, 'git');

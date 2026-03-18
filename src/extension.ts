@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { FileNode, GitFileGroupsProvider, GroupNode } from './GitFileGroupsProvider';
 import { log } from './logging';
 
@@ -416,7 +417,9 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         const resourceUri = arg instanceof vscode.Uri ? arg : arg instanceof vscode.TreeItem ? arg.resourceUri : undefined;
         if (!resourceUri) return;
 
-        const fileName = resourceUri.fsPath.split(/[\\/]/).pop() || resourceUri.fsPath;
+        const fileName = resourceUri.fsPath.split(/[\/]/).pop() || resourceUri.fsPath;
+        log(`[discardChange] command invoked for ${resourceUri.fsPath}`, 'git-discard');
+        vscode.window.setStatusBarMessage(`Git File Groups: discard requested for ${fileName}`, 2500);
         const confirmed = await vscode.window.showWarningMessage(
             `Discard changes to ${fileName}? This cannot be undone.`,
             { modal: true },
@@ -424,22 +427,36 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         );
         if (confirmed !== 'Discard') return;
 
+        log(`[discardChange] confirmed for ${resourceUri.fsPath}`, 'git-discard');
+        vscode.window.setStatusBarMessage(`Git File Groups: confirmed discard for ${fileName}`, 2500);
+
         try {
             const gitExtension = vscode.extensions.getExtension('vscode.git');
             if (!gitExtension) {
+                log('[discardChange] vscode.git extension not found', 'git-discard');
                 vscode.window.showErrorMessage('Git extension not available');
                 return;
             }
-            if (!gitExtension.isActive) await gitExtension.activate();
+            log(`[discardChange] vscode.git extension found; active=${gitExtension.isActive}`, 'git-discard');
+            if (!gitExtension.isActive) {
+                log('[discardChange] activating vscode.git extension', 'git-discard');
+                vscode.window.setStatusBarMessage('Git File Groups: activating Git extension...', 2500);
+                await gitExtension.activate();
+            }
             const api = gitExtension.exports.getAPI(1);
+            log(`[discardChange] Git API repositories: ${api.repositories?.length ?? 0}`, 'git-discard');
             const repository = api.repositories.find((repo: any) => {
                 const repoPath = repo.rootUri?.fsPath;
                 return repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
             });
             if (!repository) {
+                log('[discardChange] repository not found for workspace root', 'git-discard');
                 vscode.window.showErrorMessage('Repository not found for file');
                 return;
             }
+
+            log(`[discardChange] repository found at ${repository.rootUri?.fsPath}`, 'git-discard');
+            vscode.window.setStatusBarMessage(`Git File Groups: running discard for ${fileName}`, 2500);
 
             // Determine whether the change appears untracked
             const state = repository.state;
@@ -460,11 +477,11 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
 
             // Use the Git extension repository API directly with defensive fallbacks.
             const callRepositoryMethodWithFallback = async (methodName: 'clean' | 'revert') => {
-                // Try the most-compatible shapes first: filesystem path string, then Uri, then stringified Uri
+                log(`[discardChange] trying repository.${methodName} fallbacks`, 'git-discard');
+                // Try the most-compatible shapes first: filesystem path string, then Uri, then a stringified Uri.
                 const attempts: any[][] = [[resourceUri.fsPath], [resourceUri], [resourceUri.toString()]];
-                // If we have the matched SourceControlResourceState from earlier, include it as a last-resort attempt
                 if (match) {
-                    attempts.push([match]);
+                    attempts.unshift([match]);
                 }
 
                 for (const args of attempts) {
@@ -476,7 +493,6 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                         }
                         const argPreview = args.map(a => (a && (a as any).fsPath) ? (a as any).fsPath : String(a));
                         log(`Attempting repository.${methodName} with args: ${JSON.stringify(argPreview)}`, 'git-discard');
-                        // Call the repository method with the single-array argument (resources array)
                         await fn.call(repository, args);
                         log(`repository.${methodName} succeeded with args: ${JSON.stringify(argPreview)}`, 'git-discard');
                         return true;
@@ -499,10 +515,50 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                     }
                 }
 
+                try {
+                    const cmd = methodName === 'clean' ? 'git.clean' : 'git.revertChange';
+                    log(`Falling back to executeCommand('${cmd}', resourceUri)`, 'git-discard');
+                    await vscode.commands.executeCommand(cmd, resourceUri);
+                    return true;
+                } catch (err: any) {
+                    log(`Fallback command ${methodName} with resourceUri failed: ${err && err.message ? err.message : String(err)}`, 'git-discard');
+                }
+
                 return false;
             };
 
+            const runGitRestore = async () => {
+                log('[discardChange] falling back to direct git restore', 'git-discard');
+                const workspaceRoot = gitFileGroupsProvider.getWorkspaceRoot();
+                const args = ['-C', workspaceRoot, 'restore', '--source=HEAD', '--staged', '--worktree', resourceUri.fsPath];
+                return await new Promise<boolean>((resolve) => {
+                    const child = spawn('git', args, { shell: false });
+                    let stderr = '';
+
+                    child.stderr.on('data', (chunk) => {
+                        stderr += chunk.toString();
+                    });
+
+                    child.on('error', (err) => {
+                        log(`git restore spawn failed: ${err instanceof Error ? err.message : String(err)}`, 'git-discard');
+                        resolve(false);
+                    });
+
+                    child.on('close', (code) => {
+                        if (code === 0) {
+                            log(`git restore succeeded for ${resourceUri.fsPath}`, 'git-discard');
+                            vscode.window.setStatusBarMessage(`Git File Groups: discard completed for ${fileName}`, 2500);
+                            resolve(true);
+                        } else {
+                            log(`git restore failed for ${resourceUri.fsPath} (code ${code}): ${stderr.trim()}`, 'git-discard');
+                            resolve(false);
+                        }
+                    });
+                });
+            };
+
             if (isUntracked) {
+                log(`[discardChange] file appears untracked: ${resourceUri.fsPath}`, 'git-discard');
                 const ok = await callRepositoryMethodWithFallback('clean');
                 if (ok) {
                     vscode.window.showInformationMessage(`Discarded untracked file ${fileName}`);
@@ -511,7 +567,8 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                     return;
                 }
             } else {
-                const ok = await callRepositoryMethodWithFallback('revert');
+                log(`[discardChange] file appears tracked/modified: ${resourceUri.fsPath}`, 'git-discard');
+                const ok = await runGitRestore() || await callRepositoryMethodWithFallback('revert');
                 if (ok) {
                     vscode.window.showInformationMessage(`Discarded changes to ${fileName}`);
                 } else {
