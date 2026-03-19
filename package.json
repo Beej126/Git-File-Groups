@@ -1,6 +1,6 @@
 {
   "name": "git-file-groups",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Group source control changed files in VSCode tree view",
   "publisher": "Beej",
   "repository": "https://github.com/beej126/Git-File-Groups",
@@ -168,7 +168,6 @@
           "when": "view == gitFileGroupsTreeView && viewItem == file",
           "group": "inline@5"
         },
-
         {
           "command": "git-file-groups.renameGroup",
           "when": "view == gitFileGroupsTreeView && viewItem == group && viewItem != ungrouped",
