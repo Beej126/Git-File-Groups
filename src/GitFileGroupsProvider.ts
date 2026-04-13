@@ -21,7 +21,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private debugLoggingEnabled: boolean = false;
   private loggedFeatures: Set<string> = new Set();
   private syncAssignmentsTimer: NodeJS.Timeout | undefined;
-  private suppressAssignmentSyncUntil: number | undefined;
 
   private async executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
     for (const commandId of commandIds) {
@@ -218,49 +217,65 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   scheduleSyncAssignmentsWithGitStatus(delayMs: number = 150): void {
-    if (this.isAssignmentSyncSuppressed()) {
-      log('Skipping scheduled assignment sync because auto-sync is disabled for the current commit', 'git');
-      this.refresh();
-      return;
-    }
-
     if (this.syncAssignmentsTimer) {
       clearTimeout(this.syncAssignmentsTimer);
     }
 
     this.syncAssignmentsTimer = setTimeout(() => {
       this.syncAssignmentsTimer = undefined;
-      if (this.isAssignmentSyncSuppressed()) {
-        log('Skipping scheduled assignment sync because auto-sync is disabled for the current commit', 'git');
-        this.refresh();
-        return;
-      }
-
       this.syncAssignmentsWithGitStatus(true).catch(error => {
         log(`Scheduled assignment sync failed: ${error}`, 'git');
       });
     }, delayMs);
   }
 
-  disableAssignmentSyncOnce(durationMs: number = 2000): void {
-    this.suppressAssignmentSyncUntil = Date.now() + durationMs;
-  }
-
   private async delay(durationMs: number): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, durationMs));
   }
 
-  private isAssignmentSyncSuppressed(): boolean {
-    if (!this.suppressAssignmentSyncUntil) {
+  async syncRepositoryToRemote(repository: any): Promise<boolean> {
+    if (!repository) {
       return false;
     }
 
-    if (Date.now() >= this.suppressAssignmentSyncUntil) {
-      this.suppressAssignmentSyncUntil = undefined;
-      return false;
+    const attempts: Array<() => Promise<void>> = [];
+
+    if (typeof repository.sync === 'function') {
+      attempts.push(async () => {
+        await repository.sync();
+      });
     }
 
-    return true;
+    if (typeof repository.push === 'function') {
+      attempts.push(async () => {
+        await repository.push();
+      });
+    }
+
+    const commandArgs = [repository, repository.rootUri, repository.sourceControl, undefined];
+    for (const commandId of ['git.sync', 'git.push']) {
+      for (const arg of commandArgs) {
+        attempts.push(async () => {
+          if (arg === undefined) {
+            await vscode.commands.executeCommand(commandId);
+            return;
+          }
+
+          await vscode.commands.executeCommand(commandId, arg);
+        });
+      }
+    }
+
+    for (const attempt of attempts) {
+      try {
+        await attempt();
+        return true;
+      } catch (error) {
+        log(`Post-commit git sync attempt failed: ${error}`, 'git');
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -524,7 +539,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       title: `Commit Group: ${trimmed}`,
       placeHolder: 'Enter commit message...',
       value: trimmed,
-      autoSync: true
+      syncToRemote: true
     });
 
     if (!commitInput) {
@@ -545,16 +560,15 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
 
     try {
-      if (!commitInput.autoSync) {
-        this.disableAssignmentSyncOnce();
-      }
-
       await repository.commit(commitInput.message);
       log(`[commitGroup] Committed with message: ${commitInput.message}`, 'git');
-      if (commitInput.autoSync) {
-        await this.syncAssignmentsAfterGitOperation(Array.from(targetUris), true);
-      } else {
-        this.refresh();
+      await this.syncAssignmentsAfterGitOperation(Array.from(targetUris), true);
+
+      if (commitInput.syncToRemote) {
+        const synced = await this.syncRepositoryToRemote(repository);
+        if (!synced) {
+          vscode.window.showWarningMessage('Commit completed, but Git sync to the remote did not run successfully.');
+        }
       }
     } catch (error) {
       log(`[commitGroup] Direct commit failed: ${error}`, 'git');

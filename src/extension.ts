@@ -296,7 +296,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         const commitInput = await promptForCommitInput({
             title: 'Commit Changes',
             placeHolder: 'Enter commit message...',
-            autoSync: true
+            syncToRemote: true
         });
 
         if (!commitInput) {
@@ -314,16 +314,15 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                     return repoPath && path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase() === path.normalize(repoPath).toLowerCase();
                 });
                 if (repository) {
-                    if (!commitInput.autoSync) {
-                        gitFileGroupsProvider.disableAssignmentSyncOnce();
-                    }
-
                     await repository.commit(commitInput.message);
                     log(`Committed with message: ${commitInput.message}`, 'git');
-                    if (commitInput.autoSync) {
-                        await gitFileGroupsProvider.syncAssignmentsAfterGitOperation(stagedUris, true);
-                    } else {
-                        gitFileGroupsProvider.refresh();
+                    await gitFileGroupsProvider.syncAssignmentsAfterGitOperation(stagedUris, true);
+
+                    if (commitInput.syncToRemote) {
+                        const synced = await gitFileGroupsProvider.syncRepositoryToRemote(repository);
+                        if (!synced) {
+                            vscode.window.showWarningMessage('Commit completed, but Git sync to the remote did not run successfully.');
+                        }
                     }
                 }
             }
