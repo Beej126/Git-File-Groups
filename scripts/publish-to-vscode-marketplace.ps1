@@ -4,7 +4,7 @@
 
 node ./scripts/bump-version.js
 
-# git add package.json package.jsonc
+# git add package.json
 git add -A
 
 $newver = $(node -e "console.log(require('./package.json').version)")

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { ProjectStorage, GitFileGroupsData } from './ProjectStorage';
+import { promptForCommitInput } from './commitQuickInput';
 import { log, setLoggedFeatures } from './logging';
 
 interface GitAPI {
@@ -19,6 +20,8 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private treeView: vscode.TreeView<vscode.TreeItem> | undefined;
   private debugLoggingEnabled: boolean = false;
   private loggedFeatures: Set<string> = new Set();
+  private syncAssignmentsTimer: NodeJS.Timeout | undefined;
+  private suppressAssignmentSyncUntil: number | undefined;
 
   private async executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
     for (const commandId of commandIds) {
@@ -108,6 +111,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     
     // Load data from project file
     await this.loadData();
+    await this.syncAssignmentsWithGitStatus();
   }
 
   private async loadData(): Promise<void> {
@@ -131,6 +135,84 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       groups: this.groups,
       assignments: this.assignments
     });
+  }
+
+  async syncAssignmentsWithGitStatus(refreshTree: boolean = false): Promise<boolean> {
+    const snapshot = await this.loadGitSnapshot();
+    if (!snapshot.repositoryAvailable) {
+      log('Skipping assignment sync because repository is not available yet', 'git');
+      if (refreshTree) {
+        this.refresh();
+      }
+      return false;
+    }
+
+    const activeAssignmentKeys = new Set(
+      snapshot.entries
+        .map(entry => this.toAssignmentKey(entry.resourceUri))
+        .filter((key): key is string => typeof key === 'string' && key.length > 0)
+    );
+
+    let removedAssignments = 0;
+    for (const key of Object.keys(this.assignments)) {
+      if (!activeAssignmentKeys.has(key)) {
+        delete this.assignments[key];
+        removedAssignments += 1;
+      }
+    }
+
+    if (removedAssignments > 0) {
+      log(`Pruned ${removedAssignments} assignment(s) that no longer have git changes`, 'git');
+      await this.saveData();
+    }
+
+    if (refreshTree) {
+      this.refresh();
+    }
+
+    return removedAssignments > 0;
+  }
+
+  scheduleSyncAssignmentsWithGitStatus(delayMs: number = 150): void {
+    if (this.isAssignmentSyncSuppressed()) {
+      log('Skipping scheduled assignment sync because auto-sync is disabled for the current commit', 'git');
+      this.refresh();
+      return;
+    }
+
+    if (this.syncAssignmentsTimer) {
+      clearTimeout(this.syncAssignmentsTimer);
+    }
+
+    this.syncAssignmentsTimer = setTimeout(() => {
+      this.syncAssignmentsTimer = undefined;
+      if (this.isAssignmentSyncSuppressed()) {
+        log('Skipping scheduled assignment sync because auto-sync is disabled for the current commit', 'git');
+        this.refresh();
+        return;
+      }
+
+      this.syncAssignmentsWithGitStatus(true).catch(error => {
+        log(`Scheduled assignment sync failed: ${error}`, 'git');
+      });
+    }, delayMs);
+  }
+
+  disableAssignmentSyncOnce(durationMs: number = 2000): void {
+    this.suppressAssignmentSyncUntil = Date.now() + durationMs;
+  }
+
+  private isAssignmentSyncSuppressed(): boolean {
+    if (!this.suppressAssignmentSyncUntil) {
+      return false;
+    }
+
+    if (Date.now() >= this.suppressAssignmentSyncUntil) {
+      this.suppressAssignmentSyncUntil = undefined;
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -169,6 +251,10 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
   dispose(): void {
     // Clean up resources
+    if (this.syncAssignmentsTimer) {
+      clearTimeout(this.syncAssignmentsTimer);
+      this.syncAssignmentsTimer = undefined;
+    }
     this.onDidChangeTreeDataEmitter.dispose();
   }
 
@@ -386,13 +472,14 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       log(`Failed to stage files: ${e}`, 'git');
     }
 
-    const message = await vscode.window.showInputBox({
-      prompt: 'Commit message',
+    const commitInput = await promptForCommitInput({
+      title: `Commit Group: ${trimmed}`,
       placeHolder: 'Enter commit message...',
-      value: trimmed
+      value: trimmed,
+      autoSync: true
     });
 
-    if (!message) {
+    if (!commitInput) {
       log(`[commitGroup] User cancelled, restoring staged changes`, 'git');
       for (const change of stagedChanges) {
         const changeUri = change.resourceUri ?? change.uri;
@@ -410,9 +497,17 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
 
     try {
-      await repository.commit(message);
-      log(`[commitGroup] Committed with message: ${message}`, 'git');
-      this.refresh();
+      if (!commitInput.autoSync) {
+        this.disableAssignmentSyncOnce();
+      }
+
+      await repository.commit(commitInput.message);
+      log(`[commitGroup] Committed with message: ${commitInput.message}`, 'git');
+      if (commitInput.autoSync) {
+        await this.syncAssignmentsWithGitStatus(true);
+      } else {
+        this.refresh();
+      }
     } catch (error) {
       log(`[commitGroup] Direct commit failed: ${error}`, 'git');
     }
@@ -658,11 +753,16 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   private async loadGitFileEntries(): Promise<FileEntry[]> {
+    const snapshot = await this.loadGitSnapshot();
+    return snapshot.entries;
+  }
+
+  private async loadGitSnapshot(): Promise<{ entries: FileEntry[]; repositoryAvailable: boolean }> {
     try {
       const gitExtension = vscode.extensions.getExtension<GitAPI>('vscode.git');
       if (!gitExtension) {
         log('Git extension not found', 'git');
-        return [];
+        return { entries: [], repositoryAvailable: false };
       }
 
       if (!gitExtension.isActive) {
@@ -712,7 +812,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
       if (!repository) {
           log(`No Git repository found for workspace: ${this.workspaceRoot}`, 'git');
-        return [];
+        return { entries: [], repositoryAvailable: false };
       }
 
       this.cachedRepositoryRoot = repository?.rootUri?.fsPath;
@@ -758,10 +858,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         log(`No entries produced from changes. First change status: ${(changes[0] as any)?.status}`, 'git');
       }
 
-      return entries.sort((a, b) => a.fileName.localeCompare(b.fileName));
+      return {
+        entries: entries.sort((a, b) => a.fileName.localeCompare(b.fileName)),
+        repositoryAvailable: true
+      };
     } catch (error) {
       log(`Error accessing Git API: ${error}`, 'git');
-      return [];
+      return { entries: [], repositoryAvailable: false };
     }
   }
 

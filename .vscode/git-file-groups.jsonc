@@ -1,12 +1,12 @@
 {
   // Link patterns map regex -> URL template
   "links": [
-      {
-          "#(?<WorkItemId>[0-9]+)": "https://dev.azure.com/KingCounty-EnvironmentalLab/Kraken/_workitems/edit/$WorkItemId"
-      }
+    {
+      "#(?<WorkItemId>[0-9]+)": "https://dev.azure.com/KingCounty-EnvironmentalLab/Kraken/_workitems/edit/$WorkItemId"
+    }
   ],
   "groups": [
-      "fixes #16751"
+    "fixes #16751"
   ],
   "assignments": {}
 }

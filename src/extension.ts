@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { promptForCommitInput } from './commitQuickInput';
 import { FileNode, GitFileGroupsProvider, GroupNode } from './GitFileGroupsProvider';
 import { log } from './logging';
 
@@ -13,6 +14,10 @@ export function activate(context: vscode.ExtensionContext) {
     const initializeForWorkspace = (workspaceRoot: string) => {
         log(`Creating GitFileGroupsProvider with workspaceRoot: ${workspaceRoot}`, 'lifecycle');
         const gitFileGroupsProvider = new GitFileGroupsProvider(workspaceRoot, context.globalState);
+        const scheduleAssignmentSync = (reason: string) => {
+            log(`${reason} - scheduling assignment sync`, 'git');
+            gitFileGroupsProvider.scheduleSyncAssignmentsWithGitStatus();
+        };
 
         const dragAndDropController: vscode.TreeDragAndDropController<vscode.TreeItem> = {
             dragMimeTypes: ['application/vnd.code.tree.git-file-groups'],
@@ -135,8 +140,8 @@ export function activate(context: vscode.ExtensionContext) {
         };
 
         waitForGitRepositories().then(async () => {
-            log('Refreshing after Git repositories are ready', 'lifecycle');
-            gitFileGroupsProvider.refresh();
+            log('Git repositories are ready - synchronizing assignments', 'lifecycle');
+            await gitFileGroupsProvider.syncAssignmentsWithGitStatus(true);
 
             // Subscribe to repository state changes so the view updates when files change
             try {
@@ -150,8 +155,7 @@ export function activate(context: vscode.ExtensionContext) {
 
                     if (repo && repo.state && typeof repo.state.onDidChange === 'function') {
                         const disposable = repo.state.onDidChange(() => {
-                            log('Repository state changed - refreshing', 'git');
-                            gitFileGroupsProvider.refresh();
+                            scheduleAssignmentSync('Repository state changed');
                         });
                         context.subscriptions.push(disposable);
                     }
@@ -161,8 +165,7 @@ export function activate(context: vscode.ExtensionContext) {
                         const d2 = api.onDidOpenRepository((r: any) => {
                             const repoPath = r.rootUri?.fsPath;
                             if (repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase()) {
-                                log('Repository opened - refreshing', 'git');
-                                gitFileGroupsProvider.refresh();
+                                scheduleAssignmentSync('Repository opened');
                             }
                         });
                         context.subscriptions.push(d2);
@@ -290,12 +293,13 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
     });
 
     let commitWithMessageCommand = vscode.commands.registerCommand('git-file-groups.commitWithMessage', async () => {
-        const message = await vscode.window.showInputBox({
-            prompt: 'Commit message',
-            placeHolder: 'Enter commit message...'
+        const commitInput = await promptForCommitInput({
+            title: 'Commit Changes',
+            placeHolder: 'Enter commit message...',
+            autoSync: true
         });
 
-        if (!message) {
+        if (!commitInput) {
             return;
         }
 
@@ -310,10 +314,17 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                     return repoPath && path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase() === path.normalize(repoPath).toLowerCase();
                 });
                 if (repository) {
-                    await repository.commit(message);
-                    log(`Committed with message: ${message}`, 'git');
-                    // Refresh view after commit so active changes and groups update
-                    gitFileGroupsProvider.refresh();
+                    if (!commitInput.autoSync) {
+                        gitFileGroupsProvider.disableAssignmentSyncOnce();
+                    }
+
+                    await repository.commit(commitInput.message);
+                    log(`Committed with message: ${commitInput.message}`, 'git');
+                    if (commitInput.autoSync) {
+                        await gitFileGroupsProvider.syncAssignmentsWithGitStatus(true);
+                    } else {
+                        gitFileGroupsProvider.refresh();
+                    }
                 }
             }
         } catch (error) {
@@ -577,7 +588,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                 }
             }
 
-            gitFileGroupsProvider.refresh();
+            await gitFileGroupsProvider.syncAssignmentsWithGitStatus(true);
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to discard changes: ${e}`);
         }

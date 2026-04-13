@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { applyEdits, modify, parse, ParseError, printParseErrorCode } from 'jsonc-parser';
 import { log } from './logging';
 
 export interface GitFileGroupsData {
@@ -8,8 +9,25 @@ export interface GitFileGroupsData {
   assignments: Record<string, string>;
 }
 
+class MalformedProjectConfigError extends Error {
+  constructor(
+    public readonly filePath: string,
+    public readonly line: number,
+    public readonly column: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'MalformedProjectConfigError';
+  }
+}
+
 export class ProjectStorage {
   private static readonly STORAGE_FILE = '.vscode/git-file-groups.jsonc';
+  private static readonly JSONC_FORMATTING_OPTIONS = {
+    insertSpaces: true,
+    tabSize: 2,
+    insertFinalNewline: true
+  };
 
   /**
    * Very small, permissive JSONC comment stripper for allowing // and C-style block comments
@@ -25,6 +43,7 @@ export class ProjectStorage {
   }
 
   private storagePath: string;
+  private lastMalformedConfigMessage: string | undefined;
 
   constructor(private workspaceRoot: string) {
     this.storagePath = path.join(workspaceRoot, ProjectStorage.STORAGE_FILE);
@@ -84,8 +103,10 @@ export class ProjectStorage {
       }
 
       const content = await fs.promises.readFile(this.storagePath, 'utf8');
+      this.assertValidJsonc(content);
       const stripped = this.stripJsonComments(content);
       const data = JSON.parse(stripped);
+      this.lastMalformedConfigMessage = undefined;
       
       const assignments = typeof data.assignments === 'object' ? data.assignments : {};
       
@@ -94,6 +115,7 @@ export class ProjectStorage {
         assignments: this.denormalizeAssignmentsFromStorage(assignments)
       };
     } catch (error) {
+      this.reportMalformedConfigIfNeeded(error);
       log(`Error loading project data: ${error}`, 'config');
       return { groups: [], assignments: {} };
     }
@@ -102,15 +124,39 @@ export class ProjectStorage {
   async saveData(data: GitFileGroupsData): Promise<void> {
     try {
       await this.ensureStorageDirectory();
-      const content = JSON.stringify({
+      const normalizedAssignments = this.normalizeAssignmentsForStorage(data.assignments);
+      const content = await this.buildUpdatedContent({
         groups: data.groups,
-        assignments: this.normalizeAssignmentsForStorage(data.assignments)
-      }, null, 2);
+        assignments: normalizedAssignments
+      });
       await fs.promises.writeFile(this.storagePath, content, 'utf8');
     } catch (error) {
       log(`Error saving project data: ${error}`, 'config');
       throw error;
     }
+  }
+
+  private async buildUpdatedContent(data: { groups: string[]; assignments: Record<string, string> }): Promise<string> {
+    if (!fs.existsSync(this.storagePath)) {
+      return `${JSON.stringify(data, null, 2)}\n`;
+    }
+
+    const existingContent = await fs.promises.readFile(this.storagePath, 'utf8');
+    this.assertValidJsonc(existingContent);
+    this.lastMalformedConfigMessage = undefined;
+
+    let updatedContent = this.applyJsoncEdit(existingContent, ['groups'], data.groups);
+    updatedContent = this.applyJsoncEdit(updatedContent, ['assignments'], data.assignments);
+    return updatedContent;
+  }
+
+  private applyJsoncEdit(content: string, jsonPath: (string | number)[], value: unknown): string {
+    const formattingOptions = {
+      ...ProjectStorage.JSONC_FORMATTING_OPTIONS,
+      eol: content.includes('\r\n') ? '\r\n' : '\n'
+    };
+    const edits = modify(content, jsonPath, value, { formattingOptions });
+    return applyEdits(content, edits);
   }
 
   async migrateFromGlobalState(globalState: vscode.Memento): Promise<boolean> {
@@ -125,10 +171,7 @@ export class ProjectStorage {
         return false; // No data to migrate
       }
 
-      // Convert absolute paths to relative paths for assignments
-      const normalizedAssignments = this.normalizeAssignmentsForStorage(assignments);
-
-      await this.saveData({ groups, assignments: normalizedAssignments });
+      await this.saveData({ groups, assignments });
 
       // Clear legacy data from global state
       await globalState.update(legacyGroupsKey, undefined);
@@ -154,12 +197,66 @@ export class ProjectStorage {
         return {};
       }
       const content = await fs.promises.readFile(this.storagePath, 'utf8');
+      this.assertValidJsonc(content);
       const stripped = this.stripJsonComments(content);
       const data = JSON.parse(stripped);
+      this.lastMalformedConfigMessage = undefined;
       return data || {};
     } catch (error) {
+      this.reportMalformedConfigIfNeeded(error);
       log(`Error loading project config: ${error}`, 'config');
       return {};
     }
+  }
+
+  private assertValidJsonc(content: string): void {
+    const parseErrors: ParseError[] = [];
+    parse(content, parseErrors, {
+      allowEmptyContent: true,
+      allowTrailingComma: true,
+      disallowComments: false
+    });
+
+    if (parseErrors.length === 0) {
+      return;
+    }
+
+    const firstError = parseErrors[0];
+    const position = this.getLineAndColumn(content, firstError.offset);
+    const message = `${printParseErrorCode(firstError.error)} at line ${position.line}, column ${position.column}`;
+    throw new MalformedProjectConfigError(this.storagePath, position.line, position.column, message);
+  }
+
+  private getLineAndColumn(content: string, offset: number): { line: number; column: number } {
+    const prefix = content.slice(0, offset);
+    const lines = prefix.split(/\r\n|\r|\n/);
+    const line = lines.length;
+    const column = (lines[lines.length - 1]?.length ?? 0) + 1;
+    return { line, column };
+  }
+
+  private reportMalformedConfigIfNeeded(error: unknown): void {
+    if (!(error instanceof MalformedProjectConfigError)) {
+      return;
+    }
+
+    const message = `Git File Groups could not read or update its config because it contains malformed JSONC: ${error.filePath} (${error.message})`;
+    if (this.lastMalformedConfigMessage === message) {
+      return;
+    }
+
+    this.lastMalformedConfigMessage = message;
+    void vscode.window.showErrorMessage(message, 'Open File').then(async selection => {
+      if (selection !== 'Open File') {
+        return;
+      }
+
+      try {
+        const document = await vscode.workspace.openTextDocument(error.filePath);
+        await vscode.window.showTextDocument(document, { preview: false });
+      } catch (openError) {
+        log(`Failed to open malformed config file ${error.filePath}: ${openError}`, 'config');
+      }
+    });
   }
 }
