@@ -137,6 +137,50 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     });
   }
 
+  async syncAssignmentsAfterGitOperation(targetUris: vscode.Uri[], refreshTree: boolean = false): Promise<boolean> {
+    const targetKeys = new Set(
+      targetUris
+        .map(uri => this.toAssignmentKey(uri))
+        .filter((key): key is string => typeof key === 'string' && key.length > 0)
+    );
+
+    if (targetKeys.size === 0) {
+      return this.syncAssignmentsWithGitStatus(refreshTree);
+    }
+
+    let lastResult = false;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      lastResult = await this.syncAssignmentsWithGitStatus(false);
+
+      const snapshot = await this.loadGitSnapshot();
+      if (!snapshot.repositoryAvailable) {
+        break;
+      }
+
+      const activeKeys = new Set(
+        snapshot.entries
+          .map(entry => this.toAssignmentKey(entry.resourceUri))
+          .filter((key): key is string => typeof key === 'string' && key.length > 0)
+      );
+
+      const hasPendingTarget = Array.from(targetKeys).some(key => activeKeys.has(key));
+      if (!hasPendingTarget) {
+        if (refreshTree) {
+          this.refresh();
+        }
+        return lastResult;
+      }
+
+      await this.delay(250);
+    }
+
+    if (refreshTree) {
+      this.refresh();
+    }
+
+    return lastResult;
+  }
+
   async syncAssignmentsWithGitStatus(refreshTree: boolean = false): Promise<boolean> {
     const snapshot = await this.loadGitSnapshot();
     if (!snapshot.repositoryAvailable) {
@@ -200,6 +244,10 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
   disableAssignmentSyncOnce(durationMs: number = 2000): void {
     this.suppressAssignmentSyncUntil = Date.now() + durationMs;
+  }
+
+  private async delay(durationMs: number): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, durationMs));
   }
 
   private isAssignmentSyncSuppressed(): boolean {
@@ -504,7 +552,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       await repository.commit(commitInput.message);
       log(`[commitGroup] Committed with message: ${commitInput.message}`, 'git');
       if (commitInput.autoSync) {
-        await this.syncAssignmentsWithGitStatus(true);
+        await this.syncAssignmentsAfterGitOperation(Array.from(targetUris), true);
       } else {
         this.refresh();
       }
@@ -513,11 +561,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
   }
 
-  async stageAllChanges(): Promise<void> {
+  async stageAllChanges(): Promise<vscode.Uri[]> {
     const gitExtension = vscode.extensions.getExtension<GitAPI>('vscode.git');
     if (!gitExtension) {
       log('Git extension not available for stageAllChanges', 'git');
-      return;
+      return [];
     }
     if (!gitExtension.isActive) {
       await gitExtension.activate();
@@ -531,7 +579,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     });
     if (!repository) {
       log('No repository found for stageAllChanges', 'git');
-      return;
+      return [];
     }
 
     // Get all current changes and stage them
@@ -543,6 +591,8 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     } catch (e) {
       log(`Failed to stage all changes: ${e}`, 'git');
     }
+
+    return allChanges.map(change => change.resourceUri);
   }
 
   async moveFilesToGroup(uris: vscode.Uri[], groupName: string): Promise<void> {

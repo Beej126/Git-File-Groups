@@ -303,7 +303,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
             return;
         }
 
-        await gitFileGroupsProvider.stageAllChanges();
+        const stagedUris = await gitFileGroupsProvider.stageAllChanges();
 
         try {
             const gitExtension = vscode.extensions.getExtension('vscode.git');
@@ -321,7 +321,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                     await repository.commit(commitInput.message);
                     log(`Committed with message: ${commitInput.message}`, 'git');
                     if (commitInput.autoSync) {
-                        await gitFileGroupsProvider.syncAssignmentsWithGitStatus(true);
+                        await gitFileGroupsProvider.syncAssignmentsAfterGitOperation(stagedUris, true);
                     } else {
                         gitFileGroupsProvider.refresh();
                     }
@@ -588,7 +588,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
                 }
             }
 
-            await gitFileGroupsProvider.syncAssignmentsWithGitStatus(true);
+            await gitFileGroupsProvider.syncAssignmentsAfterGitOperation([resourceUri], true);
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to discard changes: ${e}`);
         }
