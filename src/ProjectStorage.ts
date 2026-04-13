@@ -136,6 +136,26 @@ export class ProjectStorage {
     }
   }
 
+  async saveConfigValue(jsonPath: (string | number)[], value: unknown): Promise<void> {
+    try {
+      await this.ensureStorageDirectory();
+
+      const existingContent = fs.existsSync(this.storagePath)
+        ? await fs.promises.readFile(this.storagePath, 'utf8')
+        : '{}\n';
+
+      this.assertValidJsonc(existingContent);
+      this.lastMalformedConfigMessage = undefined;
+
+      const updatedContent = this.applyJsoncEdit(existingContent, jsonPath, value);
+      await fs.promises.writeFile(this.storagePath, updatedContent, 'utf8');
+    } catch (error) {
+      this.reportMalformedConfigIfNeeded(error);
+      log(`Error saving project config value at ${jsonPath.join('.')}: ${error}`, 'config');
+      throw error;
+    }
+  }
+
   private async buildUpdatedContent(data: { groups: string[]; assignments: Record<string, string> }): Promise<string> {
     if (!fs.existsSync(this.storagePath)) {
       return `${JSON.stringify(data, null, 2)}\n`;

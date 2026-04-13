@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { ProjectStorage, GitFileGroupsData } from './ProjectStorage';
 import { promptForCommitInput } from './commitQuickInput';
 import { log, setLoggedFeatures } from './logging';
@@ -10,6 +11,7 @@ interface GitAPI {
 
 export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
   public static readonly UNGROUPED = 'default';
+  public static readonly AUTO_SYNC_TO_REMOTE_SETTING = 'autoSyncToRemoteAfterCommit';
   private onDidChangeTreeDataEmitter = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
@@ -20,7 +22,10 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private treeView: vscode.TreeView<vscode.TreeItem> | undefined;
   private debugLoggingEnabled: boolean = false;
   private loggedFeatures: Set<string> = new Set();
-  private syncAssignmentsTimer: NodeJS.Timeout | undefined;
+  private syncAssignmentsTimer: ReturnType<typeof setTimeout> | undefined;
+  private syncStatusDescription: string | undefined;
+  private autoSyncToRemoteEnabled: boolean = true;
+  private hasAutoSyncToRemoteSetting: boolean = false;
 
   private async executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
     for (const commandId of commandIds) {
@@ -124,9 +129,27 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       const features: string[] | undefined = Array.isArray(cfg.logged_features) ? cfg.logged_features : undefined;
       this.loggedFeatures = new Set((features || []).filter(f => typeof f === 'string' && f.trim().length > 0).map(f => f.trim()));
       setLoggedFeatures(features);
+      this.hasAutoSyncToRemoteSetting = typeof cfg[GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING] === 'boolean';
+      if (this.hasAutoSyncToRemoteSetting) {
+        this.autoSyncToRemoteEnabled = cfg[GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING];
+      }
     } catch (e) {
       // ignore and keep defaults
     }
+  }
+
+  getAutoSyncToRemoteEnabled(): boolean {
+    return this.autoSyncToRemoteEnabled;
+  }
+
+  async setAutoSyncToRemoteEnabled(enabled: boolean): Promise<void> {
+    if (this.autoSyncToRemoteEnabled === enabled && this.hasAutoSyncToRemoteSetting) {
+      return;
+    }
+
+    this.autoSyncToRemoteEnabled = enabled;
+    await this.storage.saveConfigValue([GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING], enabled);
+    this.hasAutoSyncToRemoteSetting = true;
   }
 
   private async saveData(): Promise<void> {
@@ -134,6 +157,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       groups: this.groups,
       assignments: this.assignments
     });
+
+    if (!this.hasAutoSyncToRemoteSetting) {
+      await this.storage.saveConfigValue([GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING], this.autoSyncToRemoteEnabled);
+      this.hasAutoSyncToRemoteSetting = true;
+    }
   }
 
   async syncAssignmentsAfterGitOperation(targetUris: vscode.Uri[], refreshTree: boolean = false): Promise<boolean> {
@@ -310,6 +338,14 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
   setTreeView(treeView: vscode.TreeView<vscode.TreeItem>): void {
     this.treeView = treeView;
+    this.treeView.description = this.syncStatusDescription;
+  }
+
+  setSyncStatus(ahead: number, behind: number): void {
+    this.syncStatusDescription = `Sync: ${ahead}↑ ${behind}↓`;
+    if (this.treeView) {
+      this.treeView.description = this.syncStatusDescription;
+    }
   }
 
   dispose(): void {
@@ -539,7 +575,10 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       title: `Commit Group: ${trimmed}`,
       placeHolder: 'Enter commit message...',
       value: trimmed,
-      syncToRemote: true
+      syncToRemote: this.getAutoSyncToRemoteEnabled(),
+      onSyncToRemoteChanged: async (enabled: boolean) => {
+        await this.setAutoSyncToRemoteEnabled(enabled);
+      }
     });
 
     if (!commitInput) {
@@ -671,6 +710,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     log(`getChildren called with element: ${element ? element.label : 'undefined'}`, 'view');
     log(`getChildren timestamp: ${new Date().toISOString()}`, 'view');
 
+    if (element instanceof PendingCommitsNode) {
+      const commits = await this.loadUnpushedCommits();
+      return commits.map(commit => new PendingCommitItem(commit));
+    }
+
     if (element instanceof GroupNode) {
       log(`Returning children for GroupNode: ${element.groupName}`, 'view');
       const files = await this.getGroupedFiles();
@@ -685,6 +729,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     log('Getting top-level groups', 'view');
     const groups: vscode.TreeItem[] = [];
     const files = await this.getGroupedFiles();
+    const unpushedCommits = await this.loadUnpushedCommits();
 
     // Load per-project config (may include "links")
     let config: any = {};
@@ -757,12 +802,98 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return node;
     };
 
+    groups.push(new PendingCommitsNode(unpushedCommits.length));
     groups.push(makeNode(GitFileGroupsProvider.UNGROUPED, files.ungrouped.length));
     for (const groupName of this.groups) {
       const count = (files.grouped[groupName] || []).length;
       groups.push(makeNode(groupName, count));
     }
     return groups;
+  }
+
+  private async loadUnpushedCommits(): Promise<PendingCommitEntry[]> {
+    const gitExtension = vscode.extensions.getExtension<GitAPI>('vscode.git');
+    if (!gitExtension) {
+      return [];
+    }
+
+    if (!gitExtension.isActive) {
+      await gitExtension.activate();
+    }
+
+    const api = gitExtension.exports.getAPI(1);
+    const repository = api.repositories.find((repo: any) => {
+      const repoPath = repo.rootUri?.fsPath;
+      return repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(this.workspaceRoot).toLowerCase();
+    }) ?? api.repositories.find((repo: any) => {
+      const repoPath = repo.rootUri?.fsPath;
+      return repoPath && path.normalize(this.workspaceRoot).toLowerCase().startsWith(path.normalize(repoPath).toLowerCase());
+    });
+
+    const ahead = typeof repository?.state?.HEAD?.ahead === 'number' ? repository.state.HEAD.ahead : 0;
+    if (!repository?.rootUri?.fsPath || ahead <= 0) {
+      return [];
+    }
+
+    this.cachedRepositoryRoot = repository.rootUri.fsPath;
+
+    const output = await this.runGitCommand([
+      '-C',
+      repository.rootUri.fsPath,
+      'log',
+      '--format=%H%x09%s',
+      '@{upstream}..HEAD'
+    ]);
+
+    if (!output) {
+      return [];
+    }
+
+    return output
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .map(line => {
+        const [hash, ...messageParts] = line.split('\t');
+        const message = messageParts.join('\t').trim();
+        return {
+          hash,
+          shortHash: hash.slice(0, 7),
+          message: message || hash,
+          repositoryRoot: repository.rootUri.fsPath
+        };
+      });
+  }
+
+  private async runGitCommand(args: string[]): Promise<string | undefined> {
+    return await new Promise<string | undefined>((resolve) => {
+      const child = spawn('git', args, { shell: false });
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (chunk: Buffer | string) => {
+        stdout += chunk.toString();
+      });
+
+      child.stderr.on('data', (chunk: Buffer | string) => {
+        stderr += chunk.toString();
+      });
+
+      child.on('error', (error: Error) => {
+        log(`git command failed to start: ${error}`, 'git');
+        resolve(undefined);
+      });
+
+      child.on('close', (code: number | null) => {
+        if (code === 0) {
+          resolve(stdout.trim());
+          return;
+        }
+
+        log(`git command failed (${code}): ${stderr.trim()}`, 'git');
+        resolve(undefined);
+      });
+    });
   }
 
   private getGroupLabel(type: number): string {
@@ -970,6 +1101,13 @@ interface FileEntry {
   resourceUri: vscode.Uri;
 }
 
+interface PendingCommitEntry {
+  hash: string;
+  shortHash: string;
+  message: string;
+  repositoryRoot: string;
+}
+
 export class FileNode extends vscode.TreeItem {
   constructor(
     public readonly fileName: string,
@@ -998,7 +1136,30 @@ export class GroupNode extends vscode.TreeItem {
     public readonly count?: number
   ) {
     super(groupName, isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
-    this.contextValue = groupName === GitFileGroupsProvider.UNGROUPED ? 'ungrouped' : 'group';
+    this.contextValue = groupName === GitFileGroupsProvider.UNGROUPED ? 'ungrouped-node' : 'group-node';
     // this.description = groupName === GitFileGroupsProvider.UNGROUPED ? 'Files not in any group' : undefined;
+  }
+}
+
+export class PendingCommitsNode extends vscode.TreeItem {
+  constructor(public readonly count: number) {
+    super('* commits not yet pushed', vscode.TreeItemCollapsibleState.Expanded);
+    this.contextValue = 'pending-commits-root';
+    this.description = `(${count})`;
+  }
+}
+
+export class PendingCommitItem extends vscode.TreeItem {
+  constructor(public readonly commit: PendingCommitEntry) {
+    super(commit.message, vscode.TreeItemCollapsibleState.None);
+    this.contextValue = 'pending-commit';
+    this.description = commit.shortHash;
+    this.tooltip = `${commit.shortHash} ${commit.message}`;
+    this.iconPath = new vscode.ThemeIcon('git-commit');
+    this.command = {
+      command: 'git.viewCommit',
+      title: 'View Commit',
+      arguments: [vscode.Uri.file(commit.repositoryRoot), commit.hash]
+    };
   }
 }

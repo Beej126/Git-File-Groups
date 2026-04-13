@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { log } from './logging';
 
 export interface CommitInputResult {
   message: string;
@@ -10,6 +11,7 @@ export async function promptForCommitInput(options?: {
   value?: string;
   placeHolder?: string;
   syncToRemote?: boolean;
+  onSyncToRemoteChanged?: (syncToRemote: boolean) => void | Promise<void>;
 }): Promise<CommitInputResult | undefined> {
   const input = vscode.window.createInputBox();
   const toggleButton: vscode.QuickInputButton = {
@@ -53,6 +55,11 @@ export async function promptForCommitInput(options?: {
       input.onDidTriggerButton(() => {
         syncToRemote = !syncToRemote;
         updateUi();
+        if (options?.onSyncToRemoteChanged) {
+          void Promise.resolve(options.onSyncToRemoteChanged(syncToRemote)).catch(error => {
+            log(`Failed to persist Git sync setting: ${error}`, 'config');
+          });
+        }
       }),
       input.onDidAccept(() => {
         const message = input.value.trim();

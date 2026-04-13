@@ -19,5 +19,8 @@ Not for industrial grade project work where pull-requests and branches are the o
 - External links - regexp patterns in the group title can be linked to external tools (azure devops, etc) - see [$/.vscode/git-file-groups.json](.vscode/git-file-groups.jsonc)
 - Each group commit button auto stages ONLY that group's files and initiates standard commit flow
 - Group title is the default commit message
+- Optional auto git sync (push/pull)
+- Auto git sync preference persists in `.vscode/git-file-groups.jsonc` as `autoSyncToRemoteAfterCommit`
+- and "commits not yet pushed" display
 
 ## [MIT License](LICENSE.txt)

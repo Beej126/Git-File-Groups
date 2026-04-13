@@ -306,7 +306,10 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         const commitInput = await promptForCommitInput({
             title: 'Commit Changes',
             placeHolder: 'Enter commit message...',
-            syncToRemote: true
+            syncToRemote: gitFileGroupsProvider.getAutoSyncToRemoteEnabled(),
+            onSyncToRemoteChanged: async (enabled: boolean) => {
+                await gitFileGroupsProvider.setAutoSyncToRemoteEnabled(enabled);
+            }
         });
 
         if (!commitInput) {

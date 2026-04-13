@@ -1,4 +1,5 @@
 {
+  "autoSyncToRemoteAfterCommit": true,
   // Link patterns map regex -> URL template
   "links": [
     {
@@ -6,7 +7,8 @@
     }
   ],
   "groups": [
-    "fixes #16751"
+    "fixes #16751",
+    "test"
   ],
   "assignments": {}
 }
