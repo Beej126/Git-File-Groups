@@ -9,182 +9,197 @@ log('Loading extension.ts', 'lifecycle');
 
 export function activate(context: vscode.ExtensionContext) {
     log('Activating extension...', 'lifecycle');
+    let gitFileGroupsProvider: GitFileGroupsProvider | undefined;
+
+    registerCommands(() => gitFileGroupsProvider, context);
 
     // Helper to initialize extension when a workspace root is available.
     const initializeForWorkspace = (workspaceRoot: string) => {
+        if (gitFileGroupsProvider) {
+            return;
+        }
+
         log(`Creating GitFileGroupsProvider with workspaceRoot: ${workspaceRoot}`, 'lifecycle');
-        const gitFileGroupsProvider = new GitFileGroupsProvider(workspaceRoot, context.globalState);
-        const updateSyncHeader = (repository: any | undefined) => {
-            const ahead = typeof repository?.state?.HEAD?.ahead === 'number' ? repository.state.HEAD.ahead : 0;
-            const behind = typeof repository?.state?.HEAD?.behind === 'number' ? repository.state.HEAD.behind : 0;
-            gitFileGroupsProvider.setSyncStatus(ahead, behind);
-        };
-        const scheduleAssignmentSync = (reason: string) => {
-            log(`${reason} - scheduling assignment sync`, 'git');
-            gitFileGroupsProvider.scheduleSyncAssignmentsWithGitStatus();
-        };
+        try {
+            gitFileGroupsProvider = new GitFileGroupsProvider(workspaceRoot, context.globalState);
+            const updateSyncHeader = (repository: any | undefined) => {
+                const ahead = typeof repository?.state?.HEAD?.ahead === 'number' ? repository.state.HEAD.ahead : 0;
+                const behind = typeof repository?.state?.HEAD?.behind === 'number' ? repository.state.HEAD.behind : 0;
+                gitFileGroupsProvider?.setSyncStatus(ahead, behind);
+            };
+            const scheduleAssignmentSync = (reason: string) => {
+                log(`${reason} - scheduling assignment sync`, 'git');
+                gitFileGroupsProvider?.scheduleSyncAssignmentsWithGitStatus();
+            };
 
-        const dragAndDropController: vscode.TreeDragAndDropController<vscode.TreeItem> = {
-            dragMimeTypes: ['application/vnd.code.tree.git-file-groups'],
-            dropMimeTypes: ['application/vnd.code.tree.git-file-groups'],
-            handleDrag: async (source: readonly vscode.TreeItem[], dataTransfer: vscode.DataTransfer) => {
-                const uris: string[] = [];
-                for (const item of source) {
-                    const uri = item instanceof FileNode ? item.fileUri : item.resourceUri;
-                    if (uri) {
-                        uris.push(uri.toString());
+            const dragAndDropController: vscode.TreeDragAndDropController<vscode.TreeItem> = {
+                dragMimeTypes: ['application/vnd.code.tree.git-file-groups'],
+                dropMimeTypes: ['application/vnd.code.tree.git-file-groups'],
+                handleDrag: async (source: readonly vscode.TreeItem[], dataTransfer: vscode.DataTransfer) => {
+                    const uris: string[] = [];
+                    for (const item of source) {
+                        const uri = item instanceof FileNode ? item.fileUri : item.resourceUri;
+                        if (uri) {
+                            uris.push(uri.toString());
+                        }
                     }
-                }
 
-                dataTransfer.set(
-                    'application/vnd.code.tree.git-file-groups',
-                    new vscode.DataTransferItem(JSON.stringify({ uris }))
-                );
-            },
-            handleDrop: async (target: vscode.TreeItem | undefined, dataTransfer: vscode.DataTransfer) => {
-                if (!target) {
-                    return;
-                }
-
-                // Determine the target group: allow dropping onto the group header
-                // or anywhere on a file within the group (resolve parent group).
-                let targetGroupName: string | undefined;
-                if (target instanceof GroupNode) {
-                    targetGroupName = target.groupName;
-                } else if (target instanceof FileNode) {
-                    const parent = gitFileGroupsProvider.getParent(target);
-                    if (parent instanceof GroupNode) {
-                        targetGroupName = parent.groupName;
+                    dataTransfer.set(
+                        'application/vnd.code.tree.git-file-groups',
+                        new vscode.DataTransferItem(JSON.stringify({ uris }))
+                    );
+                },
+                handleDrop: async (target: vscode.TreeItem | undefined, dataTransfer: vscode.DataTransfer) => {
+                    if (!target || !gitFileGroupsProvider) {
+                        return;
                     }
-                }
 
-                if (!targetGroupName) {
+                    // Determine the target group: allow dropping onto the group header
+                    // or anywhere on a file within the group (resolve parent group).
+                    let targetGroupName: string | undefined;
+                    if (target instanceof GroupNode) {
+                        targetGroupName = target.groupName;
+                    } else if (target instanceof FileNode) {
+                        const parent = gitFileGroupsProvider.getParent(target);
+                        if (parent instanceof GroupNode) {
+                            targetGroupName = parent.groupName;
+                        }
+                    }
+
+                    if (!targetGroupName) {
+                        return;
+                    }
+
+                    const item = dataTransfer.get('application/vnd.code.tree.git-file-groups');
+                    if (!item) {
+                        return;
+                    }
+
+                    const raw = await item.asString();
+                    let parsed: { uris: string[] } | undefined;
+                    try {
+                        parsed = JSON.parse(raw);
+                    } catch {
+                        parsed = undefined;
+                    }
+
+                    if (!parsed?.uris?.length) {
+                        return;
+                    }
+
+                    const uris = parsed.uris.map(u => vscode.Uri.parse(u));
+                    await gitFileGroupsProvider.moveFilesToGroup(uris, targetGroupName);
+                }
+            };
+
+            log('Registering Tree Data Provider', 'lifecycle');
+            const treeView = vscode.window.createTreeView('gitFileGroupsTreeView', {
+                treeDataProvider: gitFileGroupsProvider,
+                showCollapseAll: false,
+                canSelectMany: true,
+                dragAndDropController
+            });
+
+            gitFileGroupsProvider.setTreeView(treeView);
+            updateSyncHeader(undefined);
+
+            // Initialize the context for the toggle button
+            vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
+
+            context.subscriptions.push(treeView);
+            context.subscriptions.push(gitFileGroupsProvider);
+
+            // Promise-based wait for Git repositories to be available.
+            const waitForGitRepositories = async (): Promise<void> => {
+                const gitExtension = vscode.extensions.getExtension('vscode.git');
+                if (!gitExtension) {
+                    log('Git extension not available', 'git');
                     return;
                 }
-
-                const item = dataTransfer.get('application/vnd.code.tree.git-file-groups');
-                if (!item) {
-                    return;
+                if (!gitExtension.isActive) {
+                    await gitExtension.activate();
                 }
+                const api = gitExtension.exports.getAPI(1);
 
-                const raw = await item.asString();
-                let parsed: { uris: string[] } | undefined;
-                try {
-                    parsed = JSON.parse(raw);
-                } catch {
-                    parsed = undefined;
-                }
-
-                if (!parsed?.uris?.length) {
-                    return;
-                }
-
-                const uris = parsed.uris.map(u => vscode.Uri.parse(u));
-                await gitFileGroupsProvider.moveFilesToGroup(uris, targetGroupName);
-            }
-        };
-
-        log('Registering Tree Data Provider', 'lifecycle');
-        const treeView = vscode.window.createTreeView('gitFileGroupsTreeView', {
-            treeDataProvider: gitFileGroupsProvider,
-            showCollapseAll: false,
-            canSelectMany: true,
-            dragAndDropController
-        });
-
-        gitFileGroupsProvider.setTreeView(treeView);
-    updateSyncHeader(undefined);
-
-        // Initialize the context for the toggle button
-        vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
-
-        context.subscriptions.push(treeView);
-        context.subscriptions.push(gitFileGroupsProvider);
-
-        // Register commands after provider exists
-        registerCommands(gitFileGroupsProvider, context);
-
-        // Promise-based wait for Git repositories to be available.
-        const waitForGitRepositories = async (): Promise<void> => {
-            const gitExtension = vscode.extensions.getExtension('vscode.git');
-            if (!gitExtension) {
-                log('Git extension not available', 'git');
-                return;
-            }
-            if (!gitExtension.isActive) {
-                await gitExtension.activate();
-            }
-            const api = gitExtension.exports.getAPI(1);
-
-            // Prefer event-driven if available.
-            if (api.onDidChangeState) {
-                return new Promise<void>((resolve) => {
-                    const disposable = api.onDidChangeState(() => {
+                // Prefer event-driven if available.
+                if (api.onDidChangeState) {
+                    return new Promise<void>((resolve) => {
+                        const disposable = api.onDidChangeState(() => {
+                            if (api.repositories && api.repositories.length > 0) {
+                                disposable.dispose();
+                                log('Git repositories ready via onDidChangeState', 'git');
+                                resolve();
+                            }
+                        });
+                        // Resolve immediately if already populated.
                         if (api.repositories && api.repositories.length > 0) {
                             disposable.dispose();
-                            log('Git repositories ready via onDidChangeState', 'git');
                             resolve();
                         }
                     });
-                    // Resolve immediately if already populated.
-                    if (api.repositories && api.repositories.length > 0) {
-                        disposable.dispose();
-                        resolve();
-                    }
-                });
-            }
+                }
 
-            // Fallback: short-interval polling.
-            for (let i = 0; i < 20; i++) {
-                if (api.repositories && api.repositories.length > 0) {
-                    log('Git repositories ready via polling', 'git');
+                // Fallback: short-interval polling.
+                for (let i = 0; i < 20; i++) {
+                    if (api.repositories && api.repositories.length > 0) {
+                        log('Git repositories ready via polling', 'git');
+                        return;
+                    }
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                log('Git repositories still not ready after polling', 'git');
+            };
+
+            waitForGitRepositories().then(async () => {
+                const provider = gitFileGroupsProvider;
+                if (!provider) {
                     return;
                 }
-                await new Promise(r => setTimeout(r, 200));
-            }
-            log('Git repositories still not ready after polling', 'git');
-        };
 
-        waitForGitRepositories().then(async () => {
-            log('Git repositories are ready - synchronizing assignments', 'lifecycle');
-            await gitFileGroupsProvider.syncAssignmentsWithGitStatus(true);
+                log('Git repositories are ready - synchronizing assignments', 'lifecycle');
+                await provider.syncAssignmentsWithGitStatus(true);
 
-            // Subscribe to repository state changes so the view updates when files change
-            try {
-                const gitExtension = vscode.extensions.getExtension('vscode.git');
-                if (gitExtension && gitExtension.isActive) {
-                    const api = gitExtension.exports.getAPI(1);
-                    const repo = api.repositories.find((r: any) => {
-                        const repoPath = r.rootUri?.fsPath;
-                        return repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
-                    });
-
-                    updateSyncHeader(repo);
-
-                    if (repo && repo.state && typeof repo.state.onDidChange === 'function') {
-                        const disposable = repo.state.onDidChange(() => {
-                            updateSyncHeader(repo);
-                            scheduleAssignmentSync('Repository state changed');
-                        });
-                        context.subscriptions.push(disposable);
-                    }
-
-                    // Listen for repositories being opened (in case the repo was added later)
-                    if (typeof api.onDidOpenRepository === 'function') {
-                        const d2 = api.onDidOpenRepository((r: any) => {
+                // Subscribe to repository state changes so the view updates when files change
+                try {
+                    const gitExtension = vscode.extensions.getExtension('vscode.git');
+                    if (gitExtension && gitExtension.isActive) {
+                        const api = gitExtension.exports.getAPI(1);
+                        const repo = api.repositories.find((r: any) => {
                             const repoPath = r.rootUri?.fsPath;
-                            if (repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase()) {
-                                updateSyncHeader(r);
-                                scheduleAssignmentSync('Repository opened');
-                            }
+                            return repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(provider.getWorkspaceRoot()).toLowerCase();
                         });
-                        context.subscriptions.push(d2);
+
+                        updateSyncHeader(repo);
+
+                        if (repo && repo.state && typeof repo.state.onDidChange === 'function') {
+                            const disposable = repo.state.onDidChange(() => {
+                                updateSyncHeader(repo);
+                                scheduleAssignmentSync('Repository state changed');
+                            });
+                            context.subscriptions.push(disposable);
+                        }
+
+                        // Listen for repositories being opened (in case the repo was added later)
+                        if (typeof api.onDidOpenRepository === 'function') {
+                            const d2 = api.onDidOpenRepository((r: any) => {
+                                const repoPath = r.rootUri?.fsPath;
+                                if (repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(provider.getWorkspaceRoot()).toLowerCase()) {
+                                    updateSyncHeader(r);
+                                    scheduleAssignmentSync('Repository opened');
+                                }
+                            });
+                            context.subscriptions.push(d2);
+                        }
                     }
+                } catch (e) {
+                    log(`Failed to subscribe to Git events: ${e}`, 'git');
                 }
-            } catch (e) {
-                log(`Failed to subscribe to Git events: ${e}`, 'git');
-            }
-        });
+            });
+        } catch (error) {
+            gitFileGroupsProvider = undefined;
+            log(`Failed to initialize Git File Groups for workspace ${workspaceRoot}: ${error}`, 'lifecycle');
+            void vscode.window.showErrorMessage('Git File Groups failed to initialize. Check the extension output for details.');
+        }
     };
 
     // If a workspace is already open, initialize immediately. Otherwise listen for folders.
@@ -212,15 +227,27 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(folderDisposable);
 }
 
-function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionContext) {
+function registerCommands(getProvider: () => GitFileGroupsProvider | undefined, context: vscode.ExtensionContext) {
+    const runWithProvider = async <T>(action: (provider: GitFileGroupsProvider) => Promise<T> | T): Promise<T | undefined> => {
+        const gitFileGroupsProvider = getProvider();
+        if (!gitFileGroupsProvider) {
+            log('Command invoked before provider initialization completed', 'lifecycle');
+            void vscode.window.showWarningMessage('Git File Groups is still initializing. Try again in a moment.');
+            return undefined;
+        }
+
+        return action(gitFileGroupsProvider);
+    };
+
     let disposable = vscode.commands.registerCommand('git-file-groups.refreshGroup', () => {
-        if (gitFileGroupsProvider) {
+        return runWithProvider((gitFileGroupsProvider) => {
             log('Refresh command triggered', 'view');
             gitFileGroupsProvider.refresh();
-        }
+        });
     });
 
     let createGroupCommand = vscode.commands.registerCommand('git-file-groups.createGroup', async () => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         const name = await vscode.window.showInputBox({
             prompt: 'Create a new group',
             placeHolder: 'Group name'
@@ -231,9 +258,11 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         }
 
         await gitFileGroupsProvider.addGroup(name);
+        });
     });
 
     let renameGroupCommand = vscode.commands.registerCommand('git-file-groups.renameGroup', async (groupNode: GroupNode) => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         if (!groupNode || !groupNode.groupName) {
             return;
         }
@@ -250,9 +279,11 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         }
 
         await gitFileGroupsProvider.renameGroup(oldName, newName);
+        });
     });
 
     let commitGroupCommand = vscode.commands.registerCommand('git-file-groups.commitGroup', async (groupNode: GroupNode) => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         log(`commitGroup command invoked. Arg present: ${!!groupNode}`, 'view');
         if (!groupNode || !groupNode.groupName) {
             log('commitGroup called with invalid or missing groupNode', 'view');
@@ -264,9 +295,11 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         } catch (err) {
             log(`commitGroup handler failed: ${err}`, 'view');
         }
+        });
     });
 
     let deleteGroupCommand = vscode.commands.registerCommand('git-file-groups.deleteGroup', async (groupNode: GroupNode) => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         if (!groupNode || !groupNode.groupName) {
             return;
         }
@@ -284,6 +317,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         if (confirmed === 'Delete') {
             await gitFileGroupsProvider.deleteGroup(groupNode.groupName);
         }
+        });
     });
 
     let openLinkCommand = vscode.commands.registerCommand('git-file-groups.openLink', async (url: string) => {
@@ -303,6 +337,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
     });
 
     let commitWithMessageCommand = vscode.commands.registerCommand('git-file-groups.commitWithMessage', async () => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         const commitInput = await promptForCommitInput({
             title: 'Commit Changes',
             placeHolder: 'Enter commit message...',
@@ -342,9 +377,11 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         } catch (error) {
             log(`Direct commit failed: ${error}`, 'git');
         }
+        });
     });
 
     let syncRepositoryCommand = vscode.commands.registerCommand('git-file-groups.syncRepository', async () => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         try {
             const gitExtension = vscode.extensions.getExtension('vscode.git');
             if (!gitExtension) {
@@ -374,6 +411,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to sync repository: ${error}`);
         }
+        });
     });
 
     let openDiffCommand = vscode.commands.registerCommand('git-file-groups.openDiff', async (arg: vscode.Uri | vscode.TreeItem | undefined) => {
@@ -433,6 +471,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
     });
 
     let renameFileCommand = vscode.commands.registerCommand('git-file-groups.renameFile', async (arg: vscode.Uri | vscode.TreeItem | undefined) => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         const resourceUri = arg instanceof vscode.Uri ? arg : arg instanceof vscode.TreeItem ? arg.resourceUri : undefined;
         if (!resourceUri) return;
 
@@ -466,9 +505,11 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
             // ignore provider update errors but refresh view
             try { gitFileGroupsProvider.refresh(); } catch { }
         }
+        });
     });
 
     let discardChangeCommand = vscode.commands.registerCommand('git-file-groups.discardChange', async (arg: vscode.Uri | vscode.TreeItem | undefined) => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
         const resourceUri = arg instanceof vscode.Uri ? arg : arg instanceof vscode.TreeItem ? arg.resourceUri : undefined;
         if (!resourceUri) return;
 
@@ -636,26 +677,31 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to discard changes: ${e}`);
         }
+        });
     });
 
     let toggleExpandCollapseCommand = vscode.commands.registerCommand('git-file-groups.toggleExpandCollapse', async () => {
-        log('Toggle command triggered!', 'view');
-        try {
-            await gitFileGroupsProvider.toggleExpandCollapse();
-            log('Toggle command completed', 'view');
-        } catch (error) {
-            log(`Toggle command failed: ${error}`, 'view');
-        }
+        return runWithProvider(async (gitFileGroupsProvider) => {
+            log('Toggle command triggered!', 'view');
+            try {
+                await gitFileGroupsProvider.toggleExpandCollapse();
+                log('Toggle command completed', 'view');
+            } catch (error) {
+                log(`Toggle command failed: ${error}`, 'view');
+            }
+        });
     });
 
     let collapseAllGroupsCommand = vscode.commands.registerCommand('git-file-groups.collapseAllGroups', async () => {
-        log('Collapse command triggered!', 'view');
-        try {
-            await gitFileGroupsProvider.collapseAllGroups();
-            log('Collapse command completed', 'view');
-        } catch (error) {
-            log(`Collapse command failed: ${error}`, 'view');
-        }
+        return runWithProvider(async (gitFileGroupsProvider) => {
+            log('Collapse command triggered!', 'view');
+            try {
+                await gitFileGroupsProvider.collapseAllGroups();
+                log('Collapse command completed', 'view');
+            } catch (error) {
+                log(`Collapse command failed: ${error}`, 'view');
+            }
+        });
     });
     
     let copyRelativePathCommand = vscode.commands.registerCommand('git-file-groups.copyRelativePath', async (arg: vscode.Uri | vscode.TreeItem | undefined) => {
