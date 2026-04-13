@@ -7,6 +7,13 @@
 scripts/
 save-global-configs/
 **/node_modules/**
+reference_info/
+src/
+todo-list.md
+out/commitQuickInput.js
+out/GitFileGroupsProvider.js
+out/logging.js
+out/ProjectStorage.js
 *.vsix
 package.jsonc
 pnpm-lock.yaml

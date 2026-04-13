@@ -23,6 +23,8 @@ git push origin --tags
 # Use pnpm to run vsce (avoids missing npx on some systems)
 # pnpm exec -- vsce login Beej
 
-# Publish using the package.json "publish" script which runs vsce
+# Publish using the package.json "publish" script which typechecks, bundles the
+# extension (including runtime dependencies), and then runs vsce without
+# npm/yarn dependency detection. This avoids pnpm + npm-list packaging failures.
 # To avoid storing the token locally, you can run: `pnpm run publish -- --pat <YOUR_PAT>`
 pnpm run publish

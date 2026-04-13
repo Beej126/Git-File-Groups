@@ -16,24 +16,14 @@
   "scripts": {
     "watch": "tsc -watch -p ./",
     "compile": "tsc -p ./",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "lint": "eslint src --ext ts",
-    "package": "vsce package",
-    "publish": "vsce publish"
+    "package": "pnpm run compile && pnpm run bundle && vsce package --no-dependencies",
+    "publish": "pnpm run compile && pnpm run bundle && vsce publish --no-dependencies"
   },
   "activationEvents": [
-    "onView:gitFileGroupsTreeView",
-    "onCommand:git-file-groups.refreshGroup",
-    "onCommand:git-file-groups.createGroup",
-    "onCommand:git-file-groups.renameGroup",
-    "onCommand:git-file-groups.commitGroup",
-    "onCommand:git-file-groups.commitWithMessage",
-    "onCommand:git-file-groups.openFile",
-    "onCommand:git-file-groups.renameFile",
-    "onCommand:git-file-groups.openDiff",
     "onStartupFinished",
-    "workspaceContains:.git",
-    "onCommand:git-file-groups.copyRelativePath",
-    "onCommand:git-file-groups.revealInExplorer"
+    "workspaceContains:.git"
   ],
   "contributes": {
     "views": {
@@ -192,12 +182,11 @@
     "@vscode/test-electron": "^2.3.0",
     "@vscode/vsce": "^3.7.1",
     "concurrently": "^9.2.1",
+    "esbuild": "^0.28.0",
     "eslint": "^9.39.2",
+    "jsonc-parser": "^3.3.1",
     "nodemon": "^3.1.11",
     "prettier": "^2.8.8",
     "typescript": "^5.0.5"
-  },
-  "dependencies": {
-    "jsonc-parser": "^3.3.1"
   }
 }
