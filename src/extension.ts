@@ -14,6 +14,11 @@ export function activate(context: vscode.ExtensionContext) {
     const initializeForWorkspace = (workspaceRoot: string) => {
         log(`Creating GitFileGroupsProvider with workspaceRoot: ${workspaceRoot}`, 'lifecycle');
         const gitFileGroupsProvider = new GitFileGroupsProvider(workspaceRoot, context.globalState);
+        const updateSyncHeader = (repository: any | undefined) => {
+            const ahead = typeof repository?.state?.HEAD?.ahead === 'number' ? repository.state.HEAD.ahead : 0;
+            const behind = typeof repository?.state?.HEAD?.behind === 'number' ? repository.state.HEAD.behind : 0;
+            gitFileGroupsProvider.setSyncStatus(ahead, behind);
+        };
         const scheduleAssignmentSync = (reason: string) => {
             log(`${reason} - scheduling assignment sync`, 'git');
             gitFileGroupsProvider.scheduleSyncAssignmentsWithGitStatus();
@@ -88,6 +93,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
 
         gitFileGroupsProvider.setTreeView(treeView);
+    updateSyncHeader(undefined);
 
         // Initialize the context for the toggle button
         vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
@@ -153,8 +159,11 @@ export function activate(context: vscode.ExtensionContext) {
                         return repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
                     });
 
+                    updateSyncHeader(repo);
+
                     if (repo && repo.state && typeof repo.state.onDidChange === 'function') {
                         const disposable = repo.state.onDidChange(() => {
+                            updateSyncHeader(repo);
                             scheduleAssignmentSync('Repository state changed');
                         });
                         context.subscriptions.push(disposable);
@@ -165,6 +174,7 @@ export function activate(context: vscode.ExtensionContext) {
                         const d2 = api.onDidOpenRepository((r: any) => {
                             const repoPath = r.rootUri?.fsPath;
                             if (repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase()) {
+                                updateSyncHeader(r);
                                 scheduleAssignmentSync('Repository opened');
                             }
                         });
@@ -328,6 +338,38 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
             }
         } catch (error) {
             log(`Direct commit failed: ${error}`, 'git');
+        }
+    });
+
+    let syncRepositoryCommand = vscode.commands.registerCommand('git-file-groups.syncRepository', async () => {
+        try {
+            const gitExtension = vscode.extensions.getExtension('vscode.git');
+            if (!gitExtension) {
+                vscode.window.showErrorMessage('Git extension not available');
+                return;
+            }
+
+            if (!gitExtension.isActive) {
+                await gitExtension.activate();
+            }
+
+            const api = gitExtension.exports.getAPI(1);
+            const repository = api.repositories.find((repo: any) => {
+                const repoPath = repo.rootUri?.fsPath;
+                return repoPath && path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase() === path.normalize(repoPath).toLowerCase();
+            });
+
+            if (!repository) {
+                vscode.window.showErrorMessage('Repository not found for workspace');
+                return;
+            }
+
+            const synced = await gitFileGroupsProvider.syncRepositoryToRemote(repository);
+            if (!synced) {
+                vscode.window.showWarningMessage('Git sync to the remote did not run successfully.');
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to sync repository: ${error}`);
         }
     });
 
@@ -664,6 +706,7 @@ function registerCommands(gitFileGroupsProvider: any, context: vscode.ExtensionC
     context.subscriptions.push(deleteGroupCommand);
     context.subscriptions.push(openLinkCommand);
     context.subscriptions.push(commitWithMessageCommand);
+    context.subscriptions.push(syncRepositoryCommand);
     context.subscriptions.push(openDiffCommand);
     context.subscriptions.push(openFileCommand);
     context.subscriptions.push(toggleExpandCollapseCommand);
