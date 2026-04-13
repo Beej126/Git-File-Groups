@@ -9,6 +9,10 @@
       "es2017",
       "dom"
     ],
+    "types": [
+      "node",
+      "vscode"
+    ],
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
