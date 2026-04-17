@@ -1,5 +1,6 @@
 {
-  "autoSyncToRemoteAfterCommit": true,
+  "auto_sync": true,
+  "default_group": "test",
   // Link patterns map regex -> URL template
   "links": [
     {

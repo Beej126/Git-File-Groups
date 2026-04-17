@@ -12,15 +12,16 @@ Not for industrial grade project work where pull-requests and branches are the o
 
 ## Features
 
-- Sits as an additional panel in the Source Control view alongside Changes, Branches, etc
-- Groups can be created, renamed, deleted and files drag/dropped
-- File Diff, Open & Revert just like main 'Changes' panel
+- This extension sits as an additional panel in the Source Control view alongside Changes, Branches, etc
+- Groups can be created, renamed, deleted 
+- and Files can then be drag/dropped into any group
+- Default group designation where all newly edited files go
+- File Actions: Diff, Open & Revert just like main 'Changes' panel
 - **File Rename** 🚀 - i know it's a bit silly but it always annoys me that i can't rename in the git changes panel... have to click out the explorer view to do that, well NO MORE! 😄
-- External links - regexp patterns in the group title can be linked to external tools (azure devops, etc) - see [$/.vscode/git-file-groups.json](.vscode/git-file-groups.jsonc)
+- External url linking - regexp patterns in the group title can be linked to external tools (azure devops, etc) - see [$/.vscode/git-file-groups.json](.vscode/git-file-groups.jsonc)
 - Each group commit button auto stages ONLY that group's files and initiates standard commit flow
-- Group title is the default commit message
-- Optional auto git sync (push/pull)
-- Auto git sync preference persists in `.vscode/git-file-groups.jsonc` as `autoSyncToRemoteAfterCommit`
-- and "commits not yet pushed" display
+- Group title feeds the commit message which is then editable before submitting
+- Optional auto git sync (push/pull) 
+- "commits not yet pushed" section
 
 ## [MIT License](LICENSE.txt)

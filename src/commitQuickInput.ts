@@ -20,6 +20,7 @@ export async function promptForCommitInput(options?: {
   };
 
   let syncToRemote = options?.syncToRemote ?? true;
+  let showValidation = false;
 
   const updateUi = () => {
     input.title = `${options?.title ?? 'Commit Changes'} • Git Sync: ${syncToRemote ? 'On' : 'Off'}`;
@@ -28,7 +29,9 @@ export async function promptForCommitInput(options?: {
       : 'Enter a commit message. Git sync to the remote is off for this commit.';
     input.placeholder = options?.placeHolder ?? 'Enter commit message...';
     input.buttons = [toggleButton];
-    input.validationMessage = input.value.trim().length === 0 ? 'Commit message is required.' : undefined;
+    input.validationMessage = showValidation && input.value.trim().length === 0
+      ? 'Commit message is required.'
+      : undefined;
   };
 
   input.value = options?.value ?? '';
@@ -50,6 +53,7 @@ export async function promptForCommitInput(options?: {
 
     const disposables: vscode.Disposable[] = [
       input.onDidChangeValue(() => {
+        showValidation = true;
         updateUi();
       }),
       input.onDidTriggerButton(() => {
@@ -64,6 +68,7 @@ export async function promptForCommitInput(options?: {
       input.onDidAccept(() => {
         const message = input.value.trim();
         if (!message) {
+          showValidation = true;
           updateUi();
           return;
         }

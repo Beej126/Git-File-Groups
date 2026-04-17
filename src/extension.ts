@@ -10,6 +10,7 @@ log('Loading extension.ts', 'lifecycle');
 export function activate(context: vscode.ExtensionContext) {
     log('Activating extension...', 'lifecycle');
     let gitFileGroupsProvider: GitFileGroupsProvider | undefined;
+    let workspaceInitializationTimer: ReturnType<typeof setTimeout> | undefined;
 
     registerCommands(() => gitFileGroupsProvider, context);
 
@@ -109,6 +110,28 @@ export function activate(context: vscode.ExtensionContext) {
             context.subscriptions.push(treeView);
             context.subscriptions.push(gitFileGroupsProvider);
 
+            const documentChangeDisposable = vscode.workspace.onDidChangeTextDocument((event) => {
+                if (!gitFileGroupsProvider || event.contentChanges.length === 0) {
+                    return;
+                }
+
+                const documentUri = event.document.uri;
+                if (documentUri.scheme !== 'file') {
+                    return;
+                }
+
+                const workspaceRootNormalized = path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
+                const documentPathNormalized = path.normalize(documentUri.fsPath).toLowerCase();
+                if (!documentPathNormalized.startsWith(workspaceRootNormalized)) {
+                    return;
+                }
+
+                void gitFileGroupsProvider.assignDefaultGroupToEditedFiles([documentUri], true).catch(error => {
+                    log(`Default-group assignment after document edit failed: ${error}`, 'git');
+                });
+            });
+            context.subscriptions.push(documentChangeDisposable);
+
             // Promise-based wait for Git repositories to be available.
             const waitForGitRepositories = async (): Promise<void> => {
                 const gitExtension = vscode.extensions.getExtension('vscode.git');
@@ -202,29 +225,60 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
 
-    // If a workspace is already open, initialize immediately. Otherwise listen for folders.
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-        const currentWorkspaceFolder = workspaceFolders[0];
-        const workspaceRoot = currentWorkspaceFolder.uri.fsPath;
-        if (workspaceRoot) {
-            initializeForWorkspace(workspaceRoot);
+    const tryInitializeFromCurrentWorkspace = (): boolean => {
+        const folder = vscode.workspace.workspaceFolders?.[0];
+        const workspaceRoot = folder?.uri.fsPath;
+        if (!workspaceRoot) {
+            return false;
+        }
+
+        if (workspaceInitializationTimer) {
+            clearTimeout(workspaceInitializationTimer);
+            workspaceInitializationTimer = undefined;
+        }
+
+        initializeForWorkspace(workspaceRoot);
+        return true;
+    };
+
+    const scheduleWorkspaceInitializationRetry = (attempt: number = 0) => {
+        if (gitFileGroupsProvider || workspaceInitializationTimer || attempt >= 20) {
             return;
         }
+
+        workspaceInitializationTimer = setTimeout(() => {
+            workspaceInitializationTimer = undefined;
+
+            if (!tryInitializeFromCurrentWorkspace()) {
+                scheduleWorkspaceInitializationRetry(attempt + 1);
+            }
+        }, 250);
+    };
+
+    // If a workspace is already open, initialize immediately. Otherwise listen for folders.
+    if (tryInitializeFromCurrentWorkspace()) {
+        return;
     }
+
+    scheduleWorkspaceInitializationRetry();
 
     // No workspace open — listen for workspace folder additions and initialize then.
     const folderDisposable = vscode.workspace.onDidChangeWorkspaceFolders((e) => {
-        if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+        if (gitFileGroupsProvider || !vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
             return;
         }
-        const folder = vscode.workspace.workspaceFolders[0];
-        if (folder) {
-            initializeForWorkspace(folder.uri.fsPath);
+
+        if (tryInitializeFromCurrentWorkspace()) {
             folderDisposable.dispose();
         }
     });
     context.subscriptions.push(folderDisposable);
+    context.subscriptions.push(new vscode.Disposable(() => {
+        if (workspaceInitializationTimer) {
+            clearTimeout(workspaceInitializationTimer);
+            workspaceInitializationTimer = undefined;
+        }
+    }));
 }
 
 function registerCommands(getProvider: () => GitFileGroupsProvider | undefined, context: vscode.ExtensionContext) {
@@ -320,6 +374,16 @@ function registerCommands(getProvider: () => GitFileGroupsProvider | undefined, 
         });
     });
 
+    let setDefaultGroupCommand = vscode.commands.registerCommand('git-file-groups.setDefaultGroup', async (groupNode: GroupNode) => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
+        if (!groupNode || !groupNode.groupName) {
+            return;
+        }
+
+        await gitFileGroupsProvider.setDefaultGroup(groupNode.groupName);
+        });
+    });
+
     let openLinkCommand = vscode.commands.registerCommand('git-file-groups.openLink', async (url: string) => {
         if (!url) {
             return;
@@ -341,9 +405,9 @@ function registerCommands(getProvider: () => GitFileGroupsProvider | undefined, 
         const commitInput = await promptForCommitInput({
             title: 'Commit Changes',
             placeHolder: 'Enter commit message...',
-            syncToRemote: gitFileGroupsProvider.getAutoSyncToRemoteEnabled(),
+            syncToRemote: gitFileGroupsProvider.getautoSyncEnabled(),
             onSyncToRemoteChanged: async (enabled: boolean) => {
-                await gitFileGroupsProvider.setAutoSyncToRemoteEnabled(enabled);
+                await gitFileGroupsProvider.setautoSyncEnabled(enabled);
             }
         });
 
@@ -753,6 +817,7 @@ function registerCommands(getProvider: () => GitFileGroupsProvider | undefined, 
     context.subscriptions.push(renameFileCommand);
     context.subscriptions.push(commitGroupCommand);
     context.subscriptions.push(deleteGroupCommand);
+    context.subscriptions.push(setDefaultGroupCommand);
     context.subscriptions.push(openLinkCommand);
     context.subscriptions.push(commitWithMessageCommand);
     context.subscriptions.push(syncRepositoryCommand);

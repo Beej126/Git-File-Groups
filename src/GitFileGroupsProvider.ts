@@ -10,8 +10,9 @@ interface GitAPI {
 }
 
 export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
-  public static readonly UNGROUPED = 'default';
-  public static readonly AUTO_SYNC_TO_REMOTE_SETTING = 'autoSyncToRemoteAfterCommit';
+  public static readonly UNGROUPED = 'uncategorized';
+  public static readonly AUTO_SYNC_SETTING = 'auto_sync';
+  public static readonly DEFAULT_GROUP_SETTING = 'default_group';
   private onDidChangeTreeDataEmitter = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
@@ -24,8 +25,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private loggedFeatures: Set<string> = new Set();
   private syncAssignmentsTimer: ReturnType<typeof setTimeout> | undefined;
   private syncStatusDescription: string | undefined;
-  private autoSyncToRemoteEnabled: boolean = true;
+  private autoSyncEnabled: boolean = true;
   private hasAutoSyncToRemoteSetting: boolean = false;
+  private defaultGroupName: string = GitFileGroupsProvider.UNGROUPED;
+  private hasDefaultGroupSetting: boolean = false;
+  private hasInitializedKnownChangedKeys: boolean = false;
+  private knownChangedKeys: Set<string> = new Set();
+  private storageInitialized: boolean = false;
 
   private async executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
     for (const commandId of commandIds) {
@@ -115,51 +121,129 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     
     // Load data from project file
     await this.loadData();
+    this.storageInitialized = true;
     await this.syncAssignmentsWithGitStatus();
   }
 
   private async loadData(): Promise<void> {
     const data = await this.storage.loadData();
-    this.groups = data.groups || [];
-    this.assignments = data.assignments || {};
+    this.groups = (data.groups || []).filter(groupName => groupName !== GitFileGroupsProvider.UNGROUPED);
+    this.assignments = {};
 
     // Load raw config to pick up logged features
+    let shouldPersistDefaultGroup = false;
+    let shouldPersistAssignments = false;
     try {
       const cfg = await this.storage.loadConfig();
       const features: string[] | undefined = Array.isArray(cfg.logged_features) ? cfg.logged_features : undefined;
       this.loggedFeatures = new Set((features || []).filter(f => typeof f === 'string' && f.trim().length > 0).map(f => f.trim()));
       setLoggedFeatures(features);
-      this.hasAutoSyncToRemoteSetting = typeof cfg[GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING] === 'boolean';
+      this.hasDefaultGroupSetting = typeof cfg[GitFileGroupsProvider.DEFAULT_GROUP_SETTING] === 'string';
+      const configuredDefaultGroup = this.normalizeStoredGroupName(cfg[GitFileGroupsProvider.DEFAULT_GROUP_SETTING]);
+      if (configuredDefaultGroup && this.isKnownGroupName(configuredDefaultGroup)) {
+        this.defaultGroupName = configuredDefaultGroup;
+        shouldPersistDefaultGroup = cfg[GitFileGroupsProvider.DEFAULT_GROUP_SETTING] !== configuredDefaultGroup;
+      } else {
+        this.defaultGroupName = GitFileGroupsProvider.UNGROUPED;
+        shouldPersistDefaultGroup = true;
+      }
+      this.hasAutoSyncToRemoteSetting = typeof cfg[GitFileGroupsProvider.AUTO_SYNC_SETTING] === 'boolean';
       if (this.hasAutoSyncToRemoteSetting) {
-        this.autoSyncToRemoteEnabled = cfg[GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING];
+        this.autoSyncEnabled = cfg[GitFileGroupsProvider.AUTO_SYNC_SETTING];
       }
     } catch (e) {
-      // ignore and keep defaults
+      this.defaultGroupName = GitFileGroupsProvider.UNGROUPED;
+      shouldPersistDefaultGroup = true;
+    }
+
+    for (const [key, rawGroupName] of Object.entries(data.assignments || {})) {
+      const assignmentKey = this.normalizeAssignmentKey(key);
+      const normalizedGroupName = this.normalizeStoredGroupName(rawGroupName);
+      if (!normalizedGroupName) {
+        shouldPersistAssignments = true;
+        continue;
+      }
+
+      if (normalizedGroupName === GitFileGroupsProvider.UNGROUPED) {
+        shouldPersistAssignments = true;
+        continue;
+      }
+
+      if (this.groups.includes(normalizedGroupName)) {
+        this.assignments[assignmentKey] = normalizedGroupName;
+        if (normalizedGroupName !== rawGroupName) {
+          shouldPersistAssignments = true;
+        }
+        continue;
+      }
+
+      shouldPersistAssignments = true;
+    }
+
+    if (shouldPersistDefaultGroup) {
+      await this.storage.saveConfigValue([GitFileGroupsProvider.DEFAULT_GROUP_SETTING], this.defaultGroupName);
+      this.hasDefaultGroupSetting = true;
+    }
+
+    if (shouldPersistAssignments) {
+      await this.saveData();
     }
   }
 
-  getAutoSyncToRemoteEnabled(): boolean {
-    return this.autoSyncToRemoteEnabled;
+  getDefaultGroupName(): string {
+    return this.defaultGroupName;
   }
 
-  async setAutoSyncToRemoteEnabled(enabled: boolean): Promise<void> {
-    if (this.autoSyncToRemoteEnabled === enabled && this.hasAutoSyncToRemoteSetting) {
+  async setDefaultGroup(groupName: string): Promise<void> {
+    const normalizedGroupName = this.normalizeStoredGroupName(groupName);
+    if (!normalizedGroupName || !this.isKnownGroupName(normalizedGroupName)) {
       return;
     }
 
-    this.autoSyncToRemoteEnabled = enabled;
-    await this.storage.saveConfigValue([GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING], enabled);
+    if (this.defaultGroupName === normalizedGroupName && this.hasDefaultGroupSetting) {
+      return;
+    }
+
+    this.defaultGroupName = normalizedGroupName;
+    await this.storage.saveConfigValue([GitFileGroupsProvider.DEFAULT_GROUP_SETTING], this.defaultGroupName);
+    this.hasDefaultGroupSetting = true;
+    this.refresh();
+  }
+
+  getautoSyncEnabled(): boolean {
+    return this.autoSyncEnabled;
+  }
+
+  async setautoSyncEnabled(enabled: boolean): Promise<void> {
+    if (this.autoSyncEnabled === enabled && this.hasAutoSyncToRemoteSetting) {
+      return;
+    }
+
+    this.autoSyncEnabled = enabled;
+    await this.storage.saveConfigValue([GitFileGroupsProvider.AUTO_SYNC_SETTING], enabled);
     this.hasAutoSyncToRemoteSetting = true;
   }
 
   private async saveData(): Promise<void> {
+    const persistedAssignments: Record<string, string> = {};
+    for (const [key, value] of Object.entries(this.assignments)) {
+      if (value && value !== GitFileGroupsProvider.UNGROUPED) {
+        persistedAssignments[key] = value;
+      }
+    }
+
     await this.storage.saveData({
       groups: this.groups,
-      assignments: this.assignments
+      assignments: persistedAssignments
     });
 
+    if (!this.hasDefaultGroupSetting) {
+      await this.storage.saveConfigValue([GitFileGroupsProvider.DEFAULT_GROUP_SETTING], this.defaultGroupName);
+      this.hasDefaultGroupSetting = true;
+    }
+
     if (!this.hasAutoSyncToRemoteSetting) {
-      await this.storage.saveConfigValue([GitFileGroupsProvider.AUTO_SYNC_TO_REMOTE_SETTING], this.autoSyncToRemoteEnabled);
+      await this.storage.saveConfigValue([GitFileGroupsProvider.AUTO_SYNC_SETTING], this.autoSyncEnabled);
       this.hasAutoSyncToRemoteSetting = true;
     }
   }
@@ -209,7 +293,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   async syncAssignmentsWithGitStatus(refreshTree: boolean = false): Promise<boolean> {
-    const snapshot = await this.loadGitSnapshot();
+    if (!this.storageInitialized) {
+      log('Skipping assignment sync until storage has finished loading', 'git');
+      return false;
+    }
+
+    let snapshot = await this.loadGitSnapshot();
     if (!snapshot.repositoryAvailable) {
       log('Skipping assignment sync because repository is not available yet', 'git');
       if (refreshTree) {
@@ -218,11 +307,32 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return false;
     }
 
+    const hasPersistedAssignments = Object.keys(this.assignments).length > 0;
+    if (snapshot.entries.length === 0 && hasPersistedAssignments) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await this.delay(200);
+        snapshot = await this.loadGitSnapshot();
+        if (!snapshot.repositoryAvailable) {
+          break;
+        }
+
+        if (snapshot.entries.length > 0) {
+          log(`Recovered git snapshot after startup retry ${attempt + 1}`, 'git');
+          break;
+        }
+      }
+    }
+
     const activeAssignmentKeys = new Set(
       snapshot.entries
         .map(entry => this.toAssignmentKey(entry.resourceUri))
         .filter((key): key is string => typeof key === 'string' && key.length > 0)
     );
+
+    if (!this.hasInitializedKnownChangedKeys) {
+      this.knownChangedKeys = new Set(activeAssignmentKeys);
+      this.hasInitializedKnownChangedKeys = true;
+    }
 
     let removedAssignments = 0;
     for (const key of Object.keys(this.assignments)) {
@@ -232,8 +342,20 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
     }
 
+    for (const key of activeAssignmentKeys) {
+      this.knownChangedKeys.add(key);
+    }
+
+    for (const key of Array.from(this.knownChangedKeys)) {
+      if (!activeAssignmentKeys.has(key)) {
+        this.knownChangedKeys.delete(key);
+      }
+    }
+
     if (removedAssignments > 0) {
-      log(`Pruned ${removedAssignments} assignment(s) that no longer have git changes`, 'git');
+      if (removedAssignments > 0) {
+        log(`Pruned ${removedAssignments} assignment(s) that no longer have git changes`, 'git');
+      }
       await this.saveData();
     }
 
@@ -242,6 +364,65 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
 
     return removedAssignments > 0;
+  }
+
+  async assignDefaultGroupToEditedFiles(uris: vscode.Uri[], refreshTree: boolean = true): Promise<boolean> {
+    if (!this.storageInitialized || this.defaultGroupName === GitFileGroupsProvider.UNGROUPED || uris.length === 0) {
+      return false;
+    }
+
+    const targetKeys = new Set(
+      uris
+        .map(uri => this.toAssignmentKey(uri))
+        .filter((key): key is string => typeof key === 'string' && key.length > 0)
+    );
+
+    if (targetKeys.size === 0) {
+      return false;
+    }
+
+    let assignedCount = 0;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const snapshot = await this.loadGitSnapshot();
+      if (!snapshot.repositoryAvailable) {
+        return false;
+      }
+
+      const activeKeys = new Set(
+        snapshot.entries
+          .map(entry => this.toAssignmentKey(entry.resourceUri))
+          .filter((key): key is string => typeof key === 'string' && key.length > 0)
+      );
+
+      for (const key of targetKeys) {
+        if (!activeKeys.has(key) || this.knownChangedKeys.has(key)) {
+          continue;
+        }
+
+        this.knownChangedKeys.add(key);
+        if (!this.assignments[key]) {
+          this.assignments[key] = this.defaultGroupName;
+          assignedCount += 1;
+        }
+      }
+
+      if (assignedCount > 0 || Array.from(targetKeys).every(key => this.knownChangedKeys.has(key) || !activeKeys.has(key))) {
+        break;
+      }
+
+      await this.delay(100);
+    }
+
+    if (assignedCount > 0) {
+      log(`Assigned ${assignedCount} newly edited file(s) to default group '${this.defaultGroupName}'`, 'git');
+      await this.saveData();
+      if (refreshTree) {
+        this.refresh();
+      }
+      return true;
+    }
+
+    return false;
   }
 
   scheduleSyncAssignmentsWithGitStatus(delayMs: number = 150): void {
@@ -438,7 +619,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return;
     }
 
-    if (this.groups.includes(trimmed)) {
+    if (trimmed === GitFileGroupsProvider.UNGROUPED || this.groups.includes(trimmed)) {
       return;
     }
 
@@ -450,7 +631,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   async renameGroup(oldName: string, newName: string): Promise<void> {
     const trimmedOld = oldName.trim();
     const trimmedNew = newName.trim();
-    if (!trimmedOld || !trimmedNew || trimmedOld === GitFileGroupsProvider.UNGROUPED) {
+    if (!trimmedOld || !trimmedNew || trimmedOld === GitFileGroupsProvider.UNGROUPED || trimmedNew === GitFileGroupsProvider.UNGROUPED) {
       return;
     }
 
@@ -469,6 +650,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         this.assignments[key] = trimmedNew;
       }
     }
+
+    if (this.defaultGroupName === trimmedOld) {
+      this.defaultGroupName = trimmedNew;
+      await this.storage.saveConfigValue([GitFileGroupsProvider.DEFAULT_GROUP_SETTING], this.defaultGroupName);
+      this.hasDefaultGroupSetting = true;
+    }
+
     await this.saveData();
     this.refresh();
   }
@@ -487,7 +675,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     // Remove the group
     this.groups.splice(index, 1);
 
-    // Move any assignments back to ungrouped by deleting the assignment entries
+    if (this.defaultGroupName === trimmed) {
+      this.defaultGroupName = GitFileGroupsProvider.UNGROUPED;
+      await this.storage.saveConfigValue([GitFileGroupsProvider.DEFAULT_GROUP_SETTING], this.defaultGroupName);
+      this.hasDefaultGroupSetting = true;
+    }
+
+    // Move any assignments back to uncategorized by removing explicit assignments
     for (const [key, value] of Object.entries(this.assignments)) {
       if (value === trimmed) {
         delete this.assignments[key];
@@ -574,10 +768,10 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     const commitInput = await promptForCommitInput({
       title: `Commit Group: ${trimmed}`,
       placeHolder: 'Enter commit message...',
-      value: trimmed,
-      syncToRemote: this.getAutoSyncToRemoteEnabled(),
+      ...(trimmed === GitFileGroupsProvider.UNGROUPED ? {} : { value: trimmed }),
+      syncToRemote: this.getautoSyncEnabled(),
       onSyncToRemoteChanged: async (enabled: boolean) => {
-        await this.setAutoSyncToRemoteEnabled(enabled);
+        await this.setautoSyncEnabled(enabled);
       }
     });
 
@@ -654,9 +848,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return;
     }
 
-    const isUngrouped = target === GitFileGroupsProvider.UNGROUPED;
-    const isKnownGroup = isUngrouped || this.groups.includes(target);
-    if (!isKnownGroup) {
+    if (!this.isKnownGroupName(target)) {
       return;
     }
 
@@ -666,7 +858,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         continue;
       }
 
-      if (isUngrouped) {
+      if (target === GitFileGroupsProvider.UNGROUPED) {
         delete this.assignments[key];
       } else {
         this.assignments[key] = target;
@@ -685,22 +877,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     // For GroupNodes, return undefined (they are root level)
     // For FileNodes, return the GroupNode they belong to
     if (element instanceof FileNode) {
-      for (const groupName of [GitFileGroupsProvider.UNGROUPED, ...this.groups]) {
-        if (!element.resourceUri) {
-          continue;
-        }
-
-        const key = this.toAssignmentKey(element.resourceUri);
-        const assigned = key ? this.assignments[key] : undefined;
-
-        if (groupName === GitFileGroupsProvider.UNGROUPED && !assigned) {
-          return new GroupNode(groupName);
-        }
-
-        if (assigned === groupName) {
-          return new GroupNode(groupName);
-        }
+      if (!element.resourceUri) {
+        return undefined;
       }
+
+      const key = this.toAssignmentKey(element.resourceUri);
+      const assignedGroup = this.getAssignedGroupName(key);
+      return new GroupNode(assignedGroup, true, undefined, this.isDefaultGroup(assignedGroup));
     }
 
     return undefined;
@@ -743,7 +926,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     const linkDefinitions: Array<Record<string, string>> = Array.isArray(config.links) ? config.links : [];
 
     const makeNode = (name: string, count: number) => {
-      const node = new GroupNode(name, true, count);
+      const node = new GroupNode(name, true, count, this.isDefaultGroup(name));
 
       // show count on the right side (description)
       node.description = count > 0 ? `(${count})` : undefined;
@@ -793,7 +976,8 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
           const md = new vscode.MarkdownString(urls.map(u => `[${u}](${u})`).join('\n\n'));
           md.isTrusted = true;
           node.tooltip = md;
-          node.label = `${name} 🔗`;
+          const currentLabel = typeof node.label === 'string' ? node.label : name;
+          node.label = `${currentLabel} 🔗`;
         }
       } catch (linkErr) {
         log(`Error resolving links for group ${name}: ${linkErr}`, 'config');
@@ -922,7 +1106,58 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       return undefined;
     }
 
-    return fsPath;
+    return this.normalizeAssignmentKey(fsPath);
+  }
+
+  private normalizeAssignmentKey(fsPath: string): string {
+    const normalizedPath = path.normalize(fsPath);
+    return process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
+  }
+
+  private normalizeStoredGroupName(groupName: unknown): string | undefined {
+    if (typeof groupName !== 'string') {
+      return undefined;
+    }
+
+    const trimmed = groupName.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    if (trimmed === 'default') {
+      return GitFileGroupsProvider.UNGROUPED;
+    }
+
+    return trimmed;
+  }
+
+  private isKnownGroupName(groupName: string): boolean {
+    return groupName === GitFileGroupsProvider.UNGROUPED || this.groups.includes(groupName);
+  }
+
+  private isDefaultGroup(groupName: string): boolean {
+    return groupName === this.defaultGroupName;
+  }
+
+  private getAssignedGroupName(key: string | undefined): string {
+    if (!key) {
+      return GitFileGroupsProvider.UNGROUPED;
+    }
+
+    const storedGroupName = this.normalizeStoredGroupName(this.assignments[key]);
+    if (!storedGroupName) {
+      return GitFileGroupsProvider.UNGROUPED;
+    }
+
+    if (storedGroupName === GitFileGroupsProvider.UNGROUPED) {
+      return GitFileGroupsProvider.UNGROUPED;
+    }
+
+    if (this.groups.includes(storedGroupName)) {
+      return storedGroupName;
+    }
+
+    return GitFileGroupsProvider.UNGROUPED;
   }
 
   private async getGroupedFiles(): Promise<{ ungrouped: FileEntry[]; grouped: Record<string, FileEntry[]> }> {
@@ -936,9 +1171,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     for (const entry of entries) {
       const key = this.toAssignmentKey(entry.resourceUri);
-      const assigned = key ? this.assignments[key] : undefined;
-      if (assigned && grouped[assigned]) {
-        grouped[assigned].push(entry);
+      const assignedGroup = this.getAssignedGroupName(key);
+      if (assignedGroup === GitFileGroupsProvider.UNGROUPED) {
+        ungrouped.push(entry);
+      } else if (grouped[assignedGroup]) {
+        grouped[assignedGroup].push(entry);
       } else {
         ungrouped.push(entry);
       }
@@ -1036,7 +1273,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         log(`Repository.state keys: ${Object.keys(repository.state).join(', ')}`, 'git');
       }
 
-      const entries: FileEntry[] = [];
+      const entryMap = new Map<string, FileEntry>();
       for (const change of changes) {
         // Include all changes in *Ungrouped for now.
         // We'll tighten this once we confirm the Git status values in your environment.
@@ -1046,8 +1283,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
           continue;
         }
 
-        entries.push({ fileName, resourceUri });
+        const key = this.toAssignmentKey(resourceUri) ?? resourceUri.toString();
+        if (!entryMap.has(key)) {
+          entryMap.set(key, { fileName, resourceUri });
+        }
       }
+
+      const entries = Array.from(entryMap.values());
 
       if (changes.length > 0 && entries.length === 0) {
         log(`No entries produced from changes. First change status: ${(changes[0] as any)?.status}`, 'git');
@@ -1133,17 +1375,25 @@ export class GroupNode extends vscode.TreeItem {
   constructor(
     public readonly groupName: string,
     isExpanded: boolean = true,
-    public readonly count?: number
+    public readonly count?: number,
+    public readonly isDefaultGroup: boolean = false
   ) {
     super(groupName, isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
-    this.contextValue = groupName === GitFileGroupsProvider.UNGROUPED ? 'ungrouped-node' : 'group-node';
-    // this.description = groupName === GitFileGroupsProvider.UNGROUPED ? 'Files not in any group' : undefined;
+    if (groupName === GitFileGroupsProvider.UNGROUPED) {
+      this.contextValue = isDefaultGroup ? 'uncategorized-default-node' : 'uncategorized-node';
+    } else {
+      this.contextValue = isDefaultGroup ? 'group-default-node' : 'group-node';
+    }
+
+    if (isDefaultGroup) {
+      this.label = `★ ${groupName}`;
+    }
   }
 }
 
 export class PendingCommitsNode extends vscode.TreeItem {
   constructor(public readonly count: number) {
-    super('* commits not yet pushed', vscode.TreeItemCollapsibleState.Expanded);
+    super('⟳ commits not yet pushed', vscode.TreeItemCollapsibleState.Expanded);
     this.contextValue = 'pending-commits-root';
     this.description = `(${count})`;
   }

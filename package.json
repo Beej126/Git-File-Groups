@@ -63,6 +63,11 @@
         "icon": "$(trash)"
       },
       {
+        "command": "git-file-groups.setDefaultGroup",
+        "title": "Set Default Group",
+        "icon": "$(star-empty)"
+      },
+      {
         "command": "git-file-groups.commitGroup",
         "title": "Commit Group",
         "icon": "$(check)"
@@ -170,17 +175,22 @@
         },
         {
           "command": "git-file-groups.renameGroup",
-          "when": "view == gitFileGroupsTreeView && viewItem == group-node",
+          "when": "view == gitFileGroupsTreeView && (viewItem == group-node || viewItem == group-default-node)",
+          "group": "inline"
+        },
+        {
+          "command": "git-file-groups.setDefaultGroup",
+          "when": "view == gitFileGroupsTreeView && (viewItem == group-node || viewItem == uncategorized-node)",
           "group": "inline"
         },
         {
           "command": "git-file-groups.commitGroup",
-          "when": "view == gitFileGroupsTreeView && (viewItem == group-node || viewItem == ungrouped-node)",
+          "when": "view == gitFileGroupsTreeView && (viewItem == group-node || viewItem == group-default-node || viewItem == uncategorized-node || viewItem == uncategorized-default-node)",
           "group": "inline"
         },
         {
           "command": "git-file-groups.deleteGroup",
-          "when": "view == gitFileGroupsTreeView && viewItem == group-node",
+          "when": "view == gitFileGroupsTreeView && (viewItem == group-node || viewItem == group-default-node)",
           "group": "inline"
         }
       ]
