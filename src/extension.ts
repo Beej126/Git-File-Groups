@@ -23,6 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
         log(`Creating GitFileGroupsProvider with workspaceRoot: ${workspaceRoot}`, 'lifecycle');
         try {
             gitFileGroupsProvider = new GitFileGroupsProvider(workspaceRoot, context.globalState);
+            const repositoryStateSubscriptions = new Map<string, vscode.Disposable>();
             const updateSyncHeader = (repository: any | undefined) => {
                 const ahead = typeof repository?.state?.HEAD?.ahead === 'number' ? repository.state.HEAD.ahead : 0;
                 const behind = typeof repository?.state?.HEAD?.behind === 'number' ? repository.state.HEAD.behind : 0;
@@ -31,6 +32,48 @@ export function activate(context: vscode.ExtensionContext) {
             const scheduleAssignmentSync = (reason: string) => {
                 log(`${reason} - scheduling assignment sync`, 'git');
                 gitFileGroupsProvider?.scheduleSyncAssignmentsWithGitStatus();
+            };
+            const normalizeFsPath = (value: string | undefined): string | undefined => {
+                if (!value) {
+                    return undefined;
+                }
+
+                return path.normalize(value).toLowerCase();
+            };
+            const matchesProviderRepository = (repositoryPath: string | undefined): boolean => {
+                const normalizedRepositoryPath = normalizeFsPath(repositoryPath);
+                const normalizedProviderPath = normalizeFsPath(gitFileGroupsProvider?.getWorkspaceRoot());
+                if (!normalizedRepositoryPath || !normalizedProviderPath) {
+                    return false;
+                }
+
+                return normalizedRepositoryPath === normalizedProviderPath
+                    || normalizedProviderPath.startsWith(`${normalizedRepositoryPath}${path.sep}`)
+                    || normalizedRepositoryPath.startsWith(`${normalizedProviderPath}${path.sep}`);
+            };
+            const subscribeToRepositoryState = (repository: any, reason: string) => {
+                if (!gitFileGroupsProvider) {
+                    return;
+                }
+
+                const repositoryPath = repository?.rootUri?.fsPath;
+                if (!matchesProviderRepository(repositoryPath)) {
+                    return;
+                }
+
+                updateSyncHeader(repository);
+                scheduleAssignmentSync(reason);
+
+                if (!repositoryPath || repositoryStateSubscriptions.has(repositoryPath) || !repository.state || typeof repository.state.onDidChange !== 'function') {
+                    return;
+                }
+
+                const disposable = repository.state.onDidChange(() => {
+                    updateSyncHeader(repository);
+                    scheduleAssignmentSync('Repository state changed');
+                });
+                repositoryStateSubscriptions.set(repositoryPath, disposable);
+                context.subscriptions.push(disposable);
             };
 
             const dragAndDropController: vscode.TreeDragAndDropController<vscode.TreeItem> = {
@@ -132,91 +175,58 @@ export function activate(context: vscode.ExtensionContext) {
             });
             context.subscriptions.push(documentChangeDisposable);
 
-            // Promise-based wait for Git repositories to be available.
-            const waitForGitRepositories = async (): Promise<void> => {
+            const configureGitIntegration = async (): Promise<void> => {
                 const gitExtension = vscode.extensions.getExtension('vscode.git');
                 if (!gitExtension) {
                     log('Git extension not available', 'git');
                     return;
                 }
+
                 if (!gitExtension.isActive) {
                     await gitExtension.activate();
                 }
+
                 const api = gitExtension.exports.getAPI(1);
-
-                // Prefer event-driven if available.
-                if (api.onDidChangeState) {
-                    return new Promise<void>((resolve) => {
-                        const disposable = api.onDidChangeState(() => {
-                            if (api.repositories && api.repositories.length > 0) {
-                                disposable.dispose();
-                                log('Git repositories ready via onDidChangeState', 'git');
-                                resolve();
-                            }
-                        });
-                        // Resolve immediately if already populated.
-                        if (api.repositories && api.repositories.length > 0) {
-                            disposable.dispose();
-                            resolve();
-                        }
-                    });
-                }
-
-                // Fallback: short-interval polling.
-                for (let i = 0; i < 20; i++) {
-                    if (api.repositories && api.repositories.length > 0) {
-                        log('Git repositories ready via polling', 'git');
-                        return;
-                    }
-                    await new Promise(r => setTimeout(r, 200));
-                }
-                log('Git repositories still not ready after polling', 'git');
-            };
-
-            waitForGitRepositories().then(async () => {
-                const provider = gitFileGroupsProvider;
-                if (!provider) {
+                const currentProvider = gitFileGroupsProvider;
+                if (!currentProvider) {
                     return;
                 }
 
-                log('Git repositories are ready - synchronizing assignments', 'lifecycle');
-                await provider.syncAssignmentsWithGitStatus(true);
-
-                // Subscribe to repository state changes so the view updates when files change
-                try {
-                    const gitExtension = vscode.extensions.getExtension('vscode.git');
-                    if (gitExtension && gitExtension.isActive) {
-                        const api = gitExtension.exports.getAPI(1);
-                        const repo = api.repositories.find((r: any) => {
-                            const repoPath = r.rootUri?.fsPath;
-                            return repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(provider.getWorkspaceRoot()).toLowerCase();
-                        });
-
-                        updateSyncHeader(repo);
-
-                        if (repo && repo.state && typeof repo.state.onDidChange === 'function') {
-                            const disposable = repo.state.onDidChange(() => {
-                                updateSyncHeader(repo);
-                                scheduleAssignmentSync('Repository state changed');
-                            });
-                            context.subscriptions.push(disposable);
-                        }
-
-                        // Listen for repositories being opened (in case the repo was added later)
-                        if (typeof api.onDidOpenRepository === 'function') {
-                            const d2 = api.onDidOpenRepository((r: any) => {
-                                const repoPath = r.rootUri?.fsPath;
-                                if (repoPath && path.normalize(repoPath).toLowerCase() === path.normalize(provider.getWorkspaceRoot()).toLowerCase()) {
-                                    updateSyncHeader(r);
-                                    scheduleAssignmentSync('Repository opened');
-                                }
-                            });
-                            context.subscriptions.push(d2);
-                        }
-                    }
-                } catch (e) {
-                    log(`Failed to subscribe to Git events: ${e}`, 'git');
+                for (const repository of api.repositories || []) {
+                    subscribeToRepositoryState(repository, 'Git integration configured');
                 }
+
+                if (typeof api.onDidOpenRepository === 'function') {
+                    const openRepositoryDisposable = api.onDidOpenRepository((repository: any) => {
+                        subscribeToRepositoryState(repository, 'Repository opened');
+                    });
+                    context.subscriptions.push(openRepositoryDisposable);
+                }
+
+                if (typeof api.onDidChangeState === 'function') {
+                    const gitStateDisposable = api.onDidChangeState(() => {
+                        for (const repository of api.repositories || []) {
+                            subscribeToRepositoryState(repository, 'Git state changed');
+                        }
+                    });
+                    context.subscriptions.push(gitStateDisposable);
+                }
+
+                for (let attempt = 0; attempt < 20; attempt += 1) {
+                    const matchingRepository = (api.repositories || []).find((repository: any) => matchesProviderRepository(repository?.rootUri?.fsPath));
+                    if (matchingRepository) {
+                        subscribeToRepositoryState(matchingRepository, attempt === 0 ? 'Matching repository already available' : `Matching repository detected on retry ${attempt}`);
+                        return;
+                    }
+
+                    await new Promise(r => setTimeout(r, 200));
+                }
+
+                log(`Git repositories not yet matched to workspace ${currentProvider.getWorkspaceRoot()} during startup`, 'git');
+            };
+
+            configureGitIntegration().catch((e) => {
+                log(`Failed to configure Git integration: ${e}`, 'git');
             });
         } catch (error) {
             gitFileGroupsProvider = undefined;
