@@ -7,12 +7,116 @@ import { log } from './logging';
 
 log('Loading extension.ts', 'lifecycle');
 
+class BootstrapTreeDataProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+    private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<vscode.TreeItem | undefined>();
+    readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
+    private delegate: GitFileGroupsProvider | undefined;
+
+    attach(provider: GitFileGroupsProvider): void {
+        this.delegate = provider;
+        provider.onDidChangeTreeData((item) => {
+            this.onDidChangeTreeDataEmitter.fire(item);
+        });
+        this.onDidChangeTreeDataEmitter.fire(undefined);
+    }
+
+    getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+        if (this.delegate) {
+            return this.delegate.getTreeItem(element);
+        }
+
+        return element;
+    }
+
+    getParent(element: vscode.TreeItem): vscode.ProviderResult<vscode.TreeItem> {
+        return this.delegate?.getParent(element);
+    }
+
+    getChildren(element?: vscode.TreeItem): vscode.ProviderResult<vscode.TreeItem[]> {
+        if (this.delegate) {
+            return this.delegate.getChildren(element);
+        }
+
+        return [];
+    }
+}
+
 export function activate(context: vscode.ExtensionContext) {
     log('Activating extension...', 'lifecycle');
     let gitFileGroupsProvider: GitFileGroupsProvider | undefined;
     let workspaceInitializationTimer: ReturnType<typeof setTimeout> | undefined;
+    const bootstrapProvider = new BootstrapTreeDataProvider();
 
     registerCommands(() => gitFileGroupsProvider, context);
+
+    const dragAndDropController: vscode.TreeDragAndDropController<vscode.TreeItem> = {
+        dragMimeTypes: ['application/vnd.code.tree.git-file-groups'],
+        dropMimeTypes: ['application/vnd.code.tree.git-file-groups'],
+        handleDrag: async (source: readonly vscode.TreeItem[], dataTransfer: vscode.DataTransfer) => {
+            const uris: string[] = [];
+            for (const item of source) {
+                const uri = item instanceof FileNode ? item.fileUri : item.resourceUri;
+                if (uri) {
+                    uris.push(uri.toString());
+                }
+            }
+
+            dataTransfer.set(
+                'application/vnd.code.tree.git-file-groups',
+                new vscode.DataTransferItem(JSON.stringify({ uris }))
+            );
+        },
+        handleDrop: async (target: vscode.TreeItem | undefined, dataTransfer: vscode.DataTransfer) => {
+            if (!target || !gitFileGroupsProvider) {
+                return;
+            }
+
+            let targetGroupName: string | undefined;
+            if (target instanceof GroupNode) {
+                targetGroupName = target.groupName;
+            } else if (target instanceof FileNode) {
+                const parent = gitFileGroupsProvider.getParent(target);
+                if (parent instanceof GroupNode) {
+                    targetGroupName = parent.groupName;
+                }
+            }
+
+            if (!targetGroupName) {
+                return;
+            }
+
+            const item = dataTransfer.get('application/vnd.code.tree.git-file-groups');
+            if (!item) {
+                return;
+            }
+
+            const raw = await item.asString();
+            let parsed: { uris: string[] } | undefined;
+            try {
+                parsed = JSON.parse(raw);
+            } catch {
+                parsed = undefined;
+            }
+
+            if (!parsed?.uris?.length) {
+                return;
+            }
+
+            const uris = parsed.uris.map(u => vscode.Uri.parse(u));
+            await gitFileGroupsProvider.moveFilesToGroup(uris, targetGroupName);
+        }
+    };
+
+    const treeView = vscode.window.createTreeView('gitFileGroupsTreeView', {
+        treeDataProvider: bootstrapProvider,
+        showCollapseAll: false,
+        canSelectMany: true,
+        dragAndDropController
+    });
+    treeView.message = 'Initializing...';
+    context.subscriptions.push(treeView);
+
+    void vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
 
     // Helper to initialize extension when a workspace root is available.
     const initializeForWorkspace = (workspaceRoot: string) => {
@@ -76,81 +180,12 @@ export function activate(context: vscode.ExtensionContext) {
                 context.subscriptions.push(disposable);
             };
 
-            const dragAndDropController: vscode.TreeDragAndDropController<vscode.TreeItem> = {
-                dragMimeTypes: ['application/vnd.code.tree.git-file-groups'],
-                dropMimeTypes: ['application/vnd.code.tree.git-file-groups'],
-                handleDrag: async (source: readonly vscode.TreeItem[], dataTransfer: vscode.DataTransfer) => {
-                    const uris: string[] = [];
-                    for (const item of source) {
-                        const uri = item instanceof FileNode ? item.fileUri : item.resourceUri;
-                        if (uri) {
-                            uris.push(uri.toString());
-                        }
-                    }
-
-                    dataTransfer.set(
-                        'application/vnd.code.tree.git-file-groups',
-                        new vscode.DataTransferItem(JSON.stringify({ uris }))
-                    );
-                },
-                handleDrop: async (target: vscode.TreeItem | undefined, dataTransfer: vscode.DataTransfer) => {
-                    if (!target || !gitFileGroupsProvider) {
-                        return;
-                    }
-
-                    // Determine the target group: allow dropping onto the group header
-                    // or anywhere on a file within the group (resolve parent group).
-                    let targetGroupName: string | undefined;
-                    if (target instanceof GroupNode) {
-                        targetGroupName = target.groupName;
-                    } else if (target instanceof FileNode) {
-                        const parent = gitFileGroupsProvider.getParent(target);
-                        if (parent instanceof GroupNode) {
-                            targetGroupName = parent.groupName;
-                        }
-                    }
-
-                    if (!targetGroupName) {
-                        return;
-                    }
-
-                    const item = dataTransfer.get('application/vnd.code.tree.git-file-groups');
-                    if (!item) {
-                        return;
-                    }
-
-                    const raw = await item.asString();
-                    let parsed: { uris: string[] } | undefined;
-                    try {
-                        parsed = JSON.parse(raw);
-                    } catch {
-                        parsed = undefined;
-                    }
-
-                    if (!parsed?.uris?.length) {
-                        return;
-                    }
-
-                    const uris = parsed.uris.map(u => vscode.Uri.parse(u));
-                    await gitFileGroupsProvider.moveFilesToGroup(uris, targetGroupName);
-                }
-            };
-
             log('Registering Tree Data Provider', 'lifecycle');
-            const treeView = vscode.window.createTreeView('gitFileGroupsTreeView', {
-                treeDataProvider: gitFileGroupsProvider,
-                showCollapseAll: false,
-                canSelectMany: true,
-                dragAndDropController
-            });
-
+            bootstrapProvider.attach(gitFileGroupsProvider);
             gitFileGroupsProvider.setTreeView(treeView);
+            treeView.message = undefined;
             updateSyncHeader(undefined);
 
-            // Initialize the context for the toggle button
-            vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
-
-            context.subscriptions.push(treeView);
             context.subscriptions.push(gitFileGroupsProvider);
 
             const documentChangeDisposable = vscode.workspace.onDidChangeTextDocument((event) => {
