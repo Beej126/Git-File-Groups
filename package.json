@@ -14,12 +14,9 @@
     "vscode": "^1.76.0"
   },
   "scripts": {
-    "watch": "tsc -watch -p ./",
-    "compile": "tsc -p ./",
-    "bundle": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "lint": "eslint src --ext ts",
-    "package": "pnpm run compile && pnpm run bundle && vsce package --no-dependencies",
-    "publish": "pnpm run compile && pnpm run bundle && vsce publish --no-dependencies"
+    "compile": "tsc -p ./ --noEmit && esbuild src/extension.ts --bundle --platform=node --format=cjs --main-fields=module,main --external:vscode --outfile=out/extension.js",
+    "publish": "pnpm run compile && pwsh -NoProfile -ExecutionPolicy Bypass -File ./package_bump_ver.ps1 && vsce publish --no-dependencies"
   },
   "activationEvents": [
     "onStartupFinished",

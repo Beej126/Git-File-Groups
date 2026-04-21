@@ -21,6 +21,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private cachedRepositoryRoot: string | undefined;
   private storage: ProjectStorage;
   private treeView: vscode.TreeView<vscode.TreeItem> | undefined;
+  private treeViewStateSubscriptions: vscode.Disposable[] = [];
   private debugLoggingEnabled: boolean = false;
   private loggedFeatures: Set<string> = new Set();
   private syncAssignmentsTimer: ReturnType<typeof setTimeout> | undefined;
@@ -29,6 +30,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private hasAutoSyncToRemoteSetting: boolean = false;
   private defaultGroupName: string = GitFileGroupsProvider.UNGROUPED;
   private hasDefaultGroupSetting: boolean = false;
+  private collapsedGroupNames: Set<string> = new Set();
   private hasInitializedKnownChangedKeys: boolean = false;
   private knownChangedKeys: Set<string> = new Set();
   private storageInitialized: boolean = false;
@@ -518,8 +520,27 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   setTreeView(treeView: vscode.TreeView<vscode.TreeItem>): void {
+    for (const subscription of this.treeViewStateSubscriptions) {
+      subscription.dispose();
+    }
+
+    this.treeViewStateSubscriptions = [];
     this.treeView = treeView;
     this.treeView.description = this.syncStatusDescription;
+    this.treeViewStateSubscriptions.push(
+      this.treeView.onDidCollapseElement((event) => {
+        if (event.element instanceof GroupNode) {
+          this.collapsedGroupNames.add(event.element.groupName);
+        }
+      })
+    );
+    this.treeViewStateSubscriptions.push(
+      this.treeView.onDidExpandElement((event) => {
+        if (event.element instanceof GroupNode) {
+          this.collapsedGroupNames.delete(event.element.groupName);
+        }
+      })
+    );
   }
 
   setSyncStatus(ahead: number, behind: number): void {
@@ -535,6 +556,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       clearTimeout(this.syncAssignmentsTimer);
       this.syncAssignmentsTimer = undefined;
     }
+
+    for (const subscription of this.treeViewStateSubscriptions) {
+      subscription.dispose();
+    }
+
+    this.treeViewStateSubscriptions = [];
     this.onDidChangeTreeDataEmitter.dispose();
   }
 
@@ -571,6 +598,8 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       await this.expandRootsByReveal();
     }
 
+    this.collapsedGroupNames.clear();
+
     // After expanding, show the Collapse button.
     await vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', true);
     log('toggleExpandCollapse completed', 'view');
@@ -601,6 +630,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       // Some builds may expose treeview-specific IDs
       'workbench.actions.treeView.collapseAll'
     ]);
+
+    const updatedRootItems = await this.getChildren(undefined);
+    this.collapsedGroupNames = new Set(
+      updatedRootItems
+        .filter((item): item is GroupNode => item instanceof GroupNode)
+        .map(item => item.groupName)
+    );
 
     // After collapsing, show the Expand button.
     await vscode.commands.executeCommand('setContext', 'gitFileGroups.isExpanded', false);
@@ -926,7 +962,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     const linkDefinitions: Array<Record<string, string>> = Array.isArray(config.links) ? config.links : [];
 
     const makeNode = (name: string, count: number) => {
-      const node = new GroupNode(name, true, count, this.isDefaultGroup(name));
+      const node = new GroupNode(name, !this.collapsedGroupNames.has(name), count, this.isDefaultGroup(name));
 
       // show count on the right side (description)
       node.description = count > 0 ? `(${count})` : undefined;
