@@ -384,39 +384,16 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     }
 
     let assignedCount = 0;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const snapshot = await this.loadGitSnapshot();
-      if (!snapshot.repositoryAvailable) {
-        return false;
+    for (const key of targetKeys) {
+      this.knownChangedKeys.add(key);
+      if (!this.assignments[key]) {
+        this.assignments[key] = this.defaultGroupName;
+        assignedCount += 1;
       }
-
-      const activeKeys = new Set(
-        snapshot.entries
-          .map(entry => this.toAssignmentKey(entry.resourceUri))
-          .filter((key): key is string => typeof key === 'string' && key.length > 0)
-      );
-
-      for (const key of targetKeys) {
-        if (!activeKeys.has(key) || this.knownChangedKeys.has(key)) {
-          continue;
-        }
-
-        this.knownChangedKeys.add(key);
-        if (!this.assignments[key]) {
-          this.assignments[key] = this.defaultGroupName;
-          assignedCount += 1;
-        }
-      }
-
-      if (assignedCount > 0 || Array.from(targetKeys).every(key => this.knownChangedKeys.has(key) || !activeKeys.has(key))) {
-        break;
-      }
-
-      await this.delay(100);
     }
 
     if (assignedCount > 0) {
-      log(`Assigned ${assignedCount} newly edited file(s) to default group '${this.defaultGroupName}'`, 'git');
+      log(`Assigned ${assignedCount} created/edited file(s) to default group '${this.defaultGroupName}'`, 'git');
       await this.saveData();
       if (refreshTree) {
         this.refresh();

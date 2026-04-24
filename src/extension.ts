@@ -213,6 +213,31 @@ export function activate(context: vscode.ExtensionContext) {
                 });
                 context.subscriptions.push(documentChangeDisposable);
 
+                const fileCreateDisposable = vscode.workspace.onDidCreateFiles((event) => {
+                    if (!gitFileGroupsProvider || event.files.length === 0) {
+                        return;
+                    }
+
+                    const workspaceRootNormalized = path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
+                    const fileUris = event.files.filter(fileUri => {
+                        if (fileUri.scheme !== 'file') {
+                            return false;
+                        }
+
+                        const filePathNormalized = path.normalize(fileUri.fsPath).toLowerCase();
+                        return filePathNormalized.startsWith(workspaceRootNormalized);
+                    });
+
+                    if (fileUris.length === 0) {
+                        return;
+                    }
+
+                    void gitFileGroupsProvider.assignDefaultGroupToEditedFiles(fileUris, true).catch(error => {
+                        log(`Default-group assignment after file creation failed: ${error}`, 'git');
+                    });
+                });
+                context.subscriptions.push(fileCreateDisposable);
+
                 const configureGitIntegration = async (): Promise<void> => {
                     const gitExtension = vscode.extensions.getExtension('vscode.git');
                     if (!gitExtension) {
