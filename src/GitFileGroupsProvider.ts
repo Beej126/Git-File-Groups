@@ -331,9 +331,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         .filter((key): key is string => typeof key === 'string' && key.length > 0)
     );
 
+    let newlyDiscoveredKeys: string[] = [];
     if (!this.hasInitializedKnownChangedKeys) {
       this.knownChangedKeys = new Set(activeAssignmentKeys);
       this.hasInitializedKnownChangedKeys = true;
+    } else {
+      newlyDiscoveredKeys = Array.from(activeAssignmentKeys).filter(key => !this.knownChangedKeys.has(key));
     }
 
     let removedAssignments = 0;
@@ -341,6 +344,16 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       if (!activeAssignmentKeys.has(key)) {
         delete this.assignments[key];
         removedAssignments += 1;
+      }
+    }
+
+    let assignedCount = 0;
+    if (this.defaultGroupName !== GitFileGroupsProvider.UNGROUPED) {
+      for (const key of newlyDiscoveredKeys) {
+        if (!this.assignments[key]) {
+          this.assignments[key] = this.defaultGroupName;
+          assignedCount += 1;
+        }
       }
     }
 
@@ -354,9 +367,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
     }
 
-    if (removedAssignments > 0) {
+    if (removedAssignments > 0 || assignedCount > 0) {
       if (removedAssignments > 0) {
         log(`Pruned ${removedAssignments} assignment(s) that no longer have git changes`, 'git');
+      }
+      if (assignedCount > 0) {
+        log(`Assigned ${assignedCount} externally discovered file(s) to default group '${this.defaultGroupName}'`, 'git');
       }
       await this.saveData();
     }
@@ -365,7 +381,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       this.refresh();
     }
 
-    return removedAssignments > 0;
+    return removedAssignments > 0 || assignedCount > 0;
   }
 
   async assignDefaultGroupToEditedFiles(uris: vscode.Uri[], refreshTree: boolean = true): Promise<boolean> {
