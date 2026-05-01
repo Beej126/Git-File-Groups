@@ -9,6 +9,33 @@ interface GitAPI {
   getAPI(version: number): any;
 }
 
+export function getGitCommitErrorMessage(error: unknown): string {
+  const details = error && typeof error === 'object' ? error as Record<string, unknown> : undefined;
+  const gitErrorCode = typeof details?.gitErrorCode === 'string' ? details.gitErrorCode : undefined;
+  const stderr = typeof details?.stderr === 'string' ? details.stderr.trim() : '';
+  const message = typeof details?.message === 'string' ? details.message.trim() : '';
+
+  switch (gitErrorCode) {
+    case 'NoUserNameConfigured':
+    case 'NoUserEmailConfigured':
+      return 'Git user identity is not configured. Set user.name and user.email before committing.';
+    case 'NotAGitRepository':
+      return 'This workspace is not inside a Git repository.';
+    default:
+      break;
+  }
+
+  if (stderr) {
+    return `Commit failed: ${stderr}`;
+  }
+
+  if (message) {
+    return `Commit failed: ${message}`;
+  }
+
+  return 'Commit failed. Check the Git File Groups output for details.';
+}
+
 export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
   public static readonly UNGROUPED = 'uncategorized';
   public static readonly AUTO_SYNC_SETTING = 'auto_sync';
@@ -167,7 +194,10 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
 
       if (normalizedGroupName === GitFileGroupsProvider.UNGROUPED) {
-        shouldPersistAssignments = true;
+          this.assignments[assignmentKey] = normalizedGroupName;
+          if (normalizedGroupName !== rawGroupName) {
+            shouldPersistAssignments = true;
+          }
         continue;
       }
 
@@ -229,7 +259,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private async saveData(): Promise<void> {
     const persistedAssignments: Record<string, string> = {};
     for (const [key, value] of Object.entries(this.assignments)) {
-      if (value && value !== GitFileGroupsProvider.UNGROUPED) {
+      if (value) {
         persistedAssignments[key] = value;
       }
     }
@@ -710,10 +740,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       this.hasDefaultGroupSetting = true;
     }
 
-    // Move any assignments back to uncategorized by removing explicit assignments
+    // Preserve an explicit uncategorized assignment so auto-assignment on edit
+    // does not immediately move these files into the default group.
     for (const [key, value] of Object.entries(this.assignments)) {
       if (value === trimmed) {
-        delete this.assignments[key];
+        this.assignments[key] = GitFileGroupsProvider.UNGROUPED;
       }
     }
 
@@ -834,6 +865,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
     } catch (error) {
       log(`[commitGroup] Direct commit failed: ${error}`, 'git');
+      vscode.window.showErrorMessage(getGitCommitErrorMessage(error));
     }
   }
 
@@ -888,7 +920,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
 
       if (target === GitFileGroupsProvider.UNGROUPED) {
-        delete this.assignments[key];
+        this.assignments[key] = GitFileGroupsProvider.UNGROUPED;
       } else {
         this.assignments[key] = target;
       }

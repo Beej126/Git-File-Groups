@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { promptForCommitInput } from './commitQuickInput';
-import { FileNode, GitFileGroupsProvider, GroupNode } from './GitFileGroupsProvider';
+import { FileNode, GitFileGroupsProvider, GroupNode, getGitCommitErrorMessage } from './GitFileGroupsProvider';
 import { log } from './logging';
 
 log('Loading extension.ts', 'lifecycle');
@@ -517,6 +517,7 @@ function registerCommands(getProvider: () => GitFileGroupsProvider | undefined, 
             }
         } catch (error) {
             log(`Direct commit failed: ${error}`, 'git');
+            vscode.window.showErrorMessage(getGitCommitErrorMessage(error));
         }
         });
     });
