@@ -8,8 +8,5 @@
     }
   ],
   "groups": [],
-  "assignments": {
-    ".vscode/git-file-groups.jsonc": "uncategorized",
-    "src/gitfilegroupsprovider.ts": "uncategorized"
-  }
+  "assignments": {}
 }

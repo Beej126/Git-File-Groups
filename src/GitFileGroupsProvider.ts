@@ -61,6 +61,7 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private hasInitializedKnownChangedKeys: boolean = false;
   private knownChangedKeys: Set<string> = new Set();
   private storageInitialized: boolean = false;
+  private hasSeenNonEmptyGitSnapshot: boolean = false;
 
   private async executeFirstAvailableCommand(commandIds: string[]): Promise<boolean> {
     for (const commandId of commandIds) {
@@ -139,6 +140,14 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       log(`Failed to load raw config: ${e}`, 'config');
       return {};
     }
+  }
+
+  isStorageFileUri(uri: vscode.Uri | undefined): boolean {
+    if (!uri || uri.scheme !== 'file') {
+      return false;
+    }
+
+    return path.normalize(uri.fsPath).toLowerCase() === path.normalize(this.storage.getStoragePath()).toLowerCase();
   }
 
   private async initializeStorage(): Promise<void> {
@@ -220,6 +229,11 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     if (shouldPersistAssignments) {
       await this.saveData();
     }
+  }
+
+  async reloadFromStorage(refreshTree: boolean = true): Promise<boolean> {
+    await this.loadData();
+    return this.syncAssignmentsWithGitStatus(refreshTree);
   }
 
   getDefaultGroupName(): string {
@@ -341,6 +355,14 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     const hasPersistedAssignments = Object.keys(this.assignments).length > 0;
     if (snapshot.entries.length === 0 && hasPersistedAssignments) {
+      if (!this.hasSeenNonEmptyGitSnapshot) {
+        log('Skipping empty initial git snapshot so persisted assignments are preserved until status stabilizes', 'git');
+        if (refreshTree) {
+          this.refresh();
+        }
+        return false;
+      }
+
       for (let attempt = 0; attempt < 5; attempt += 1) {
         await this.delay(200);
         snapshot = await this.loadGitSnapshot();
@@ -360,6 +382,19 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
         .map(entry => this.toAssignmentKey(entry.resourceUri))
         .filter((key): key is string => typeof key === 'string' && key.length > 0)
     );
+
+    const storageFileKey = this.normalizeAssignmentKey(this.storage.getStoragePath());
+    if (storageFileKey && activeAssignmentKeys.has(storageFileKey)) {
+      log('Skipping assignment sync for the storage file so git-managed revisions are not overwritten', 'config');
+      if (refreshTree) {
+        this.refresh();
+      }
+      return false;
+    }
+
+    if (activeAssignmentKeys.size > 0) {
+      this.hasSeenNonEmptyGitSnapshot = true;
+    }
 
     let newlyDiscoveredKeys: string[] = [];
     if (!this.hasInitializedKnownChangedKeys) {
@@ -795,36 +830,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       log(`[commitGroup] Target URI: ${uri}`, 'git');
     }
 
-    const stagedChanges = Array.isArray(repository?.state?.indexChanges) ? repository.state.indexChanges : [];
-    for (const change of stagedChanges) {
-      const changeUri = change.resourceUri ?? change.uri;
-      if (!changeUri) {
-        continue;
-      }
-
-      log(`[commitGroup] Unstaging staged change: ${changeUri}`, 'git');
-      try {
-        await repository.revert([changeUri.fsPath ?? changeUri]);
-        log(`Unstaged staged change: ${changeUri.fsPath ?? String(changeUri)}`, 'git');
-      } catch (e1) {
-        log(`Unstage with primary resource failed: ${e1}`, 'git');
-        try {
-          await repository.revert([changeUri]);
-          log(`Unstaged staged change via Uri: ${changeUri.fsPath ?? String(changeUri)}`, 'git');
-        } catch (e2) {
-          log(`Failed to unstage ${changeUri.fsPath ?? String(changeUri)}: ${e2}`, 'git');
-        }
-      }
-    }
-
-    const filePathsToStage = Array.from(targetUris).map(uri => uri.fsPath);
-    log(`[commitGroup] Staging files: ${filePathsToStage.join(', ')}`, 'git');
-    try {
-      await repository.add(filePathsToStage);
-    } catch (e) {
-      log(`Failed to stage files: ${e}`, 'git');
-    }
-
     const commitInput = await promptForCommitInput({
       title: `Commit Group: ${trimmed}`,
       placeHolder: 'Enter commit message...',
@@ -836,20 +841,64 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
     });
 
     if (!commitInput) {
-      log(`[commitGroup] User cancelled, restoring staged changes`, 'git');
-      for (const change of stagedChanges) {
-        const changeUri = change.resourceUri ?? change.uri;
-        if (!changeUri) {
-          continue;
-        }
+      log('[commitGroup] User cancelled before staging changes', 'git');
+      return;
+    }
 
-        try {
-          await repository.revert([changeUri.fsPath ?? changeUri]);
-        } catch (e) {
-          log(`Failed to unstage ${changeUri.fsPath ?? String(changeUri)}: ${e}`, 'git');
+    const stagedChanges = Array.isArray(repository?.state?.indexChanges) ? repository.state.indexChanges : [];
+    const repositoryRoot = repository.rootUri?.fsPath ?? this.workspaceRoot;
+    const stagedPaths = stagedChanges
+      .map((change: any) => change.resourceUri?.fsPath ?? change.uri?.fsPath)
+      .filter((fsPath: string | undefined): fsPath is string => typeof fsPath === 'string' && fsPath.length > 0);
+
+    if (stagedPaths.length > 0) {
+      log(`[commitGroup] Bulk-unstaging ${stagedPaths.length} previously staged file(s)`, 'git');
+      const unstaged = await this.runGitPathspecCommand(
+        repositoryRoot,
+        ['restore', '--staged', '--pathspec-from-file=-', '--pathspec-file-nul'],
+        stagedPaths
+      );
+
+      if (!unstaged) {
+        log('[commitGroup] Bulk unstage failed; falling back to repository.revert per file', 'git');
+        for (const change of stagedChanges) {
+          const changeUri = change.resourceUri ?? change.uri;
+          if (!changeUri) {
+            continue;
+          }
+
+          log(`[commitGroup] Unstaging staged change: ${changeUri}`, 'git');
+          try {
+            await repository.revert([changeUri.fsPath ?? changeUri]);
+            log(`Unstaged staged change: ${changeUri.fsPath ?? String(changeUri)}`, 'git');
+          } catch (e1) {
+            log(`Unstage with primary resource failed: ${e1}`, 'git');
+            try {
+              await repository.revert([changeUri]);
+              log(`Unstaged staged change via Uri: ${changeUri.fsPath ?? String(changeUri)}`, 'git');
+            } catch (e2) {
+              log(`Failed to unstage ${changeUri.fsPath ?? String(changeUri)}: ${e2}`, 'git');
+            }
+          }
         }
       }
-      return;
+    }
+
+    const filePathsToStage = Array.from(targetUris).map(uri => uri.fsPath);
+    log(`[commitGroup] Staging files: ${filePathsToStage.join(', ')}`, 'git');
+    const stagedTargetFiles = await this.runGitPathspecCommand(
+      repositoryRoot,
+      ['add', '--pathspec-from-file=-', '--pathspec-file-nul'],
+      filePathsToStage
+    );
+
+    if (!stagedTargetFiles) {
+      log('[commitGroup] Bulk stage failed; falling back to repository.add', 'git');
+      try {
+        await repository.add(filePathsToStage);
+      } catch (e) {
+        log(`Failed to stage files: ${e}`, 'git');
+      }
     }
 
     try {
@@ -1111,6 +1160,27 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   private async runGitCommand(args: string[]): Promise<string | undefined> {
+    return this.runGitCommandWithInput(args);
+  }
+
+  private async runGitPathspecCommand(repositoryRoot: string, commandArgs: string[], filePaths: string[]): Promise<boolean> {
+    const uniqueRelativePaths = Array.from(new Set(
+      filePaths
+        .map(filePath => path.relative(repositoryRoot, filePath))
+        .filter(relativePath => relativePath.length > 0 && !relativePath.startsWith('..'))
+        .map(relativePath => relativePath.split(path.sep).join('/'))
+    ));
+
+    if (uniqueRelativePaths.length === 0) {
+      return true;
+    }
+
+    const input = Buffer.from(`${uniqueRelativePaths.join('\0')}\0`, 'utf8');
+    const output = await this.runGitCommandWithInput(['-C', repositoryRoot, ...commandArgs], input);
+    return output !== undefined;
+  }
+
+  private async runGitCommandWithInput(args: string[], stdinContent?: Buffer): Promise<string | undefined> {
     return await new Promise<string | undefined>((resolve) => {
       const child = spawn('git', args, { shell: false });
       let stdout = '';
@@ -1123,6 +1193,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       child.stderr.on('data', (chunk: Buffer | string) => {
         stderr += chunk.toString();
       });
+
+      if (stdinContent) {
+        child.stdin.on('error', (error: Error) => {
+          log(`git command stdin failed: ${error}`, 'git');
+        });
+        child.stdin.end(stdinContent);
+      }
 
       child.on('error', (error: Error) => {
         log(`git command failed to start: ${error}`, 'git');

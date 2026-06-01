@@ -191,36 +191,38 @@ export function activate(context: vscode.ExtensionContext) {
 
                 context.subscriptions.push(gitFileGroupsProvider);
 
-                const documentChangeDisposable = vscode.workspace.onDidChangeTextDocument((event) => {
-                    if (!gitFileGroupsProvider || event.contentChanges.length === 0) {
+                const documentSaveDisposable = vscode.workspace.onDidSaveTextDocument((document) => {
+                    const provider = gitFileGroupsProvider;
+                    if (!provider) {
                         return;
                     }
 
-                    const documentUri = event.document.uri;
-                    if (documentUri.scheme !== 'file') {
+                    const documentUri = document.uri;
+                    if (documentUri.scheme !== 'file' || provider.isStorageFileUri(documentUri)) {
                         return;
                     }
 
-                    const workspaceRootNormalized = path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
+                    const workspaceRootNormalized = path.normalize(provider.getWorkspaceRoot()).toLowerCase();
                     const documentPathNormalized = path.normalize(documentUri.fsPath).toLowerCase();
                     if (!documentPathNormalized.startsWith(workspaceRootNormalized)) {
                         return;
                     }
 
-                    void gitFileGroupsProvider.assignDefaultGroupToEditedFiles([documentUri], true).catch(error => {
-                        log(`Default-group assignment after document edit failed: ${error}`, 'git');
+                    void provider.assignDefaultGroupToEditedFiles([documentUri], true).catch(error => {
+                        log(`Default-group assignment after document save failed: ${error}`, 'git');
                     });
                 });
-                context.subscriptions.push(documentChangeDisposable);
+                context.subscriptions.push(documentSaveDisposable);
 
                 const fileCreateDisposable = vscode.workspace.onDidCreateFiles((event) => {
-                    if (!gitFileGroupsProvider || event.files.length === 0) {
+                    const provider = gitFileGroupsProvider;
+                    if (!provider || event.files.length === 0) {
                         return;
                     }
 
-                    const workspaceRootNormalized = path.normalize(gitFileGroupsProvider.getWorkspaceRoot()).toLowerCase();
+                    const workspaceRootNormalized = path.normalize(provider.getWorkspaceRoot()).toLowerCase();
                     const fileUris = event.files.filter(fileUri => {
-                        if (fileUri.scheme !== 'file') {
+                        if (fileUri.scheme !== 'file' || provider.isStorageFileUri(fileUri)) {
                             return false;
                         }
 
@@ -232,7 +234,7 @@ export function activate(context: vscode.ExtensionContext) {
                         return;
                     }
 
-                    void gitFileGroupsProvider.assignDefaultGroupToEditedFiles(fileUris, true).catch(error => {
+                    void provider.assignDefaultGroupToEditedFiles(fileUris, true).catch(error => {
                         log(`Default-group assignment after file creation failed: ${error}`, 'git');
                     });
                 });
@@ -371,9 +373,9 @@ function registerCommands(getProvider: () => GitFileGroupsProvider | undefined, 
     };
 
     let disposable = vscode.commands.registerCommand('git-file-groups.refreshGroup', () => {
-        return runWithProvider((gitFileGroupsProvider) => {
+        return runWithProvider(async (gitFileGroupsProvider) => {
             log('Refresh command triggered', 'view');
-            gitFileGroupsProvider.refresh();
+            await gitFileGroupsProvider.reloadFromStorage(true);
         });
     });
 

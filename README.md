@@ -5,6 +5,7 @@
 <img width="480" height="437" alt="image" src="https://github.com/user-attachments/assets/7354e01a-04fa-4dc2-a8e0-c21c14fa8905" /><br/>
 
 A tool for bundling changed files into named groups.
+This is essentially the core feature of JetBrains' "Changelists" ported to VSCode.
 
 Intended as a lightweight mechanism for organizing work in progress.
 Not for industrial grade project work where pull-requests and branches are the obvious choices.
