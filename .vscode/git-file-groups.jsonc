@@ -8,5 +8,9 @@
     }
   ],
   "groups": [],
-  "assignments": {}
+  "assignments": {
+    "src/gitfilegroupsprovider.ts": "uncategorized",
+    "pnpm-workspace.yaml": "uncategorized",
+    "package_bump_ver.ps1": "uncategorized"
+  }
 }

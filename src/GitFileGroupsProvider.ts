@@ -58,8 +58,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
   private defaultGroupName: string = GitFileGroupsProvider.UNGROUPED;
   private hasDefaultGroupSetting: boolean = false;
   private collapsedGroupNames: Set<string> = new Set();
-  private hasInitializedKnownChangedKeys: boolean = false;
-  private knownChangedKeys: Set<string> = new Set();
   private storageInitialized: boolean = false;
   private hasSeenNonEmptyGitSnapshot: boolean = false;
 
@@ -385,23 +383,12 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     const storageFileKey = this.normalizeAssignmentKey(this.storage.getStoragePath());
     if (storageFileKey && activeAssignmentKeys.has(storageFileKey)) {
-      log('Skipping assignment sync for the storage file so git-managed revisions are not overwritten', 'config');
-      if (refreshTree) {
-        this.refresh();
-      }
-      return false;
+      log('Excluding storage file from assignment sync so git-managed revisions are not overwritten', 'config');
+      activeAssignmentKeys.delete(storageFileKey);
     }
 
     if (activeAssignmentKeys.size > 0) {
       this.hasSeenNonEmptyGitSnapshot = true;
-    }
-
-    let newlyDiscoveredKeys: string[] = [];
-    if (!this.hasInitializedKnownChangedKeys) {
-      this.knownChangedKeys = new Set(activeAssignmentKeys);
-      this.hasInitializedKnownChangedKeys = true;
-    } else {
-      newlyDiscoveredKeys = Array.from(activeAssignmentKeys).filter(key => !this.knownChangedKeys.has(key));
     }
 
     let removedAssignments = 0;
@@ -412,23 +399,13 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
       }
     }
 
+    // Every active git file must be explicitly represented in assignments.
+    // Files absent from assignments are truly new and go to the default group.
     let assignedCount = 0;
-    if (this.defaultGroupName !== GitFileGroupsProvider.UNGROUPED) {
-      for (const key of newlyDiscoveredKeys) {
-        if (!this.assignments[key]) {
-          this.assignments[key] = this.defaultGroupName;
-          assignedCount += 1;
-        }
-      }
-    }
-
     for (const key of activeAssignmentKeys) {
-      this.knownChangedKeys.add(key);
-    }
-
-    for (const key of Array.from(this.knownChangedKeys)) {
-      if (!activeAssignmentKeys.has(key)) {
-        this.knownChangedKeys.delete(key);
+      if (!this.assignments[key]) {
+        this.assignments[key] = this.defaultGroupName;
+        assignedCount += 1;
       }
     }
 
@@ -466,7 +443,6 @@ export class GitFileGroupsProvider implements vscode.TreeDataProvider<vscode.Tre
 
     let assignedCount = 0;
     for (const key of targetKeys) {
-      this.knownChangedKeys.add(key);
       if (!this.assignments[key]) {
         this.assignments[key] = this.defaultGroupName;
         assignedCount += 1;

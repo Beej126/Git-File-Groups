@@ -11,7 +11,6 @@ if (-not $newVersion) {
 	throw 'Failed to read updated version from package.json'
 }
 
-git add -A
 git commit -m "chore(release): v$newVersion"
 git tag "v$newVersion"
 
